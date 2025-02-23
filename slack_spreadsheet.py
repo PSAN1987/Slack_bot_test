@@ -9,6 +9,9 @@ from slack_bolt.adapter.flask import SlackRequestHandler
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 
+# ====== New: openai ライブラリ ======
+import openai
+
 # ============================
 # Slack の認証情報 (環境変数)
 # ============================
@@ -18,10 +21,14 @@ SLACK_SIGNING_SECRET = os.environ["SLACK_SIGNING_SECRET"]
 # ============================
 # Google認証 (Secret Filesを利用)
 # ============================
-# Render.comで Secret File を配置し、そのファイルパスを
-# GCP_SERVICE_ACCOUNT_JSON 環境変数として登録している想定。
-SERVICE_ACCOUNT_FILE = os.environ.get("GCP_SERVICE_ACCOUNT_JSON")  # ファイルパス
-SPREADSHEET_KEY = os.environ.get("SPREADSHEET_KEY")  # スプレッドシートのID
+SERVICE_ACCOUNT_FILE = os.environ.get("GCP_SERVICE_ACCOUNT_JSON")  # Secret Filesパス
+SPREADSHEET_KEY = os.environ.get("SPREADSHEET_KEY")               # スプレッドシートID
+
+# ============================
+# OpenAI APIキー
+# ============================
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
+openai.api_key = OPENAI_API_KEY  # ここでセット
 
 # Slack Bolt アプリを初期化
 app_bolt = App(
@@ -57,7 +64,6 @@ def get_gspread_client():
     gc = gspread.authorize(credentials)
     return gc
 
-
 # -----------------------
 # テキスト解析用の正規表現
 # -----------------------
@@ -71,13 +77,9 @@ re_status       = re.compile(r"・就業状況：(.+)")
 re_cert         = re.compile(r"・資格：(.+)")
 re_education    = re.compile(r"・最終学歴：(.+)")
 
-# -----------------------
-# メッセージの解析処理
-# -----------------------
-def parse_profile_info(text: str):
+def parse_profile_info_by_regex(text: str) -> dict:
     """
-    Slackメッセージ本文からプロフィール情報を抽出する
-    戻り値: dict (キー: 'name', 'member_id', 'age', 'job', 'experience', 'address', 'status', 'cert', 'education')
+    既存の正規表現を使った抽出
     """
     data = {
         "name":        "",
@@ -91,7 +93,6 @@ def parse_profile_info(text: str):
         "education":   "",
     }
 
-    # 正規表現で抽出
     m_name       = re_name.search(text)
     m_member_id  = re_member_id.search(text)
     m_age        = re_age.search(text)
@@ -124,6 +125,83 @@ def parse_profile_info(text: str):
     return data
 
 # -----------------------
+# OpenAIを用いて情報抽出する処理
+# -----------------------
+def parse_profile_info_by_openai(text: str) -> dict:
+    """
+    OpenAI API (ChatCompletion) を使って、応募メッセージから各種情報を抽出する。
+    サンプルでは JSON 形式で出力している前提。
+    """
+    if not OPENAI_API_KEY:
+        # APIキーがない場合はスキップ
+        return {}
+
+    system_prompt = (
+        "あなたはテキストから以下の情報を抽出するアシスタントです。\n"
+        "抽出すべき項目: name(氏名), member_id(会員番号), age(年齢), "
+        "job(職種), experience(経験), address(お住まい), status(就業状況), "
+        "cert(資格), education(最終学歴)\n"
+        "出力は必ず JSON 形式のみで、キー名は上記の英語でお願いします。\n"
+        "値が不明の場合は空文字にしてください。"
+    )
+
+    user_prompt = (
+        f"以下のテキストから必要項目を抜き出して、JSON形式で返してください。\n\n"
+        f"{text}\n"
+    )
+
+    try:
+        response = openai.ChatCompletion.create(
+            model="gpt-3.5-turbo",  # 必要に応じて gpt-4 等
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=0.0,
+        )
+        content = response["choices"][0]["message"]["content"].strip()
+        extracted_data = json.loads(content)
+
+        result = {
+            "name":       extracted_data.get("name", ""),
+            "member_id":  extracted_data.get("member_id", ""),
+            "age":        extracted_data.get("age", ""),
+            "job":        extracted_data.get("job", ""),
+            "experience": extracted_data.get("experience", ""),
+            "address":    extracted_data.get("address", ""),
+            "status":     extracted_data.get("status", ""),
+            "cert":       extracted_data.get("cert", ""),
+            "education":  extracted_data.get("education", ""),
+        }
+        return result
+
+    except Exception as e:
+        print(f"OpenAI API error: {e}")
+        return {}
+
+# -----------------------
+# まとめて情報抽出
+# -----------------------
+def parse_profile_info(text: str) -> dict:
+    """
+    Slackメッセージ本文からプロフィール情報を抽出する。
+    - OpenAIで解析した結果を得る
+    - 既存の正規表現で解析した結果を得る
+    - 双方をマージし、最終的な情報を返す
+    """
+    data_ai = parse_profile_info_by_openai(text)
+    data_re = parse_profile_info_by_regex(text)
+
+    final_data = {}
+    for key in ["name", "member_id", "age", "job", "experience", "address", "status", "cert", "education"]:
+        if data_ai.get(key):
+            final_data[key] = data_ai[key]
+        else:
+            final_data[key] = data_re[key]
+
+    return final_data
+
+# -----------------------
 # スプレッドシートへ書き込み
 # -----------------------
 def write_to_spreadsheet(profile_data: dict):
@@ -132,11 +210,8 @@ def write_to_spreadsheet(profile_data: dict):
     """
     gc = get_gspread_client()
     sh = gc.open_by_key(SPREADSHEET_KEY)
-    # シート名は運用次第で変更してください
     worksheet = sh.worksheet("Sheet1")
 
-    # ここでは単純に append する例
-    # カラム順は必要に応じて調整してください
     new_row = [
         profile_data["name"],
         profile_data["member_id"],
@@ -160,20 +235,32 @@ def handle_message_events(body, say, logger):
     """
     event = body.get("event", {})
     text = event.get("text", "")
+    # メッセージのタイムスタンプ (返信のthread_tsに使う)
+    thread_ts = event.get("ts")
 
     # 「ジョブメドレーより〇〇の応募がございました。」を含むかチェック
     if "ジョブメドレーより" in text and "の応募がございました" in text:
         # プロフィール情報を抽出
         parsed_data = parse_profile_info(text)
-        # 氏名が取れた等、何かしらプロフィール項目がある場合のみスプレッドシート書き込み
+
+        # 1つでも値が取れた場合のみスプレッドシート書き込み
         if parsed_data["name"] or parsed_data["member_id"]:
             try:
                 write_to_spreadsheet(parsed_data)
                 logger.info("スプレッドシートへの書き込みに成功しました。")
+
+                # 書き込みが完了したら返信(同じメッセージのスレッド上に通知)
+                say(
+                    text="スプレッドシート書き込みが完了しました。",
+                    thread_ts=thread_ts
+                )
             except Exception as e:
                 logger.error(f"スプレッドシートへの書き込みでエラー: {e}")
-
-    # 必要であれば say() で返信も可能
+                # 失敗時にも返信する場合
+                say(
+                    text=f"スプレッドシートへの書き込みでエラーが発生しました: {e}",
+                    thread_ts=thread_ts
+                )
 
 # -----------------------
 # Flaskルート設定
@@ -182,7 +269,6 @@ def handle_message_events(body, say, logger):
 def slack_events():
     return handler.handle(request)
 
-# ヘルスチェック用のエンドポイント
 @flask_app.route("/", methods=["GET"])
 def healthcheck():
     return "OK", 200
