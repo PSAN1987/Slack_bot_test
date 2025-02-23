@@ -1,12 +1,14 @@
 ﻿import os
+import re
 import json
+
 import openai
 import gspread
+
 from flask import Flask, request
 from slack_bolt import App
 from slack_bolt.adapter.flask import SlackRequestHandler
 from oauth2client.service_account import ServiceAccountCredentials
-from gspread.exceptions import WorksheetNotFound
 
 # ============================
 # Slack の認証情報 (環境変数)
@@ -18,7 +20,7 @@ SLACK_SIGNING_SECRET = os.environ["SLACK_SIGNING_SECRET"]
 # Google認証 (Secret Filesを利用)
 # ============================
 SERVICE_ACCOUNT_FILE = os.environ.get("GCP_SERVICE_ACCOUNT_JSON")  # Secret Filesパス
-SPREADSHEET_KEY = os.environ.get("SPREADSHEET_KEY")  # スプレッドシートのID
+SPREADSHEET_KEY = os.environ.get("SPREADSHEET_KEY")  # スプレッドシートID
 
 # ============================
 # OpenAI APIキー
@@ -45,7 +47,7 @@ def get_gspread_client():
     Googleスプレッドシートにアクセス可能なクライアントを返す
     """
     if not SERVICE_ACCOUNT_FILE:
-        raise ValueError("環境変数 GCP_SERVICE_ACCOUNT_JSON (Secret Filesパス) が設定されていません。")
+        raise ValueError("環境変数 GCP_SERVICE_ACCOUNT_JSON が設定されていません。")
 
     with open(SERVICE_ACCOUNT_FILE, "r", encoding="utf-8") as f:
         service_account_dict = json.load(f)
@@ -60,29 +62,45 @@ def get_gspread_client():
     return gc
 
 # -----------------------
-# チャンネル名のワークシートを取得 or 作成
+# 「【○○○様】」から医院名を抜き出す
 # -----------------------
-def get_or_create_worksheet(sh, worksheet_title: str):
+def extract_hospital_name(text: str) -> str:
     """
-    スプレッドシートオブジェクト sh から、
-    worksheet_title に一致するワークシートを探す。
-    なければ新規作成して返す。
+    例: 【センター北あだち歯科様】 → "センター北あだち歯科"
     """
-    try:
-        worksheet = sh.worksheet(worksheet_title)
-    except WorksheetNotFound:
-        # 新規にワークシートを作成
-        sh.add_worksheet(title=worksheet_title, rows=100, cols=20)
-        worksheet = sh.worksheet(worksheet_title)
-    return worksheet
+    pattern = r"【([^】]+)】"  # 「【...】」の中身
+    match = re.search(pattern, text)
+    if not match:
+        return ""
+
+    raw_name = match.group(1).strip()
+    # 末尾が「様」であれば削除
+    if raw_name.endswith("様"):
+        raw_name = raw_name[:-1]
+    return raw_name
 
 # -----------------------
-# OpenAI を用いて情報抽出
+# 「○○○よりXXXXの応募がございました。」から媒体名を抜き出す
+# -----------------------
+def extract_media_name(text: str) -> str:
+    """
+    例: "ジョブメドレーより歯科医師の応募がございました。"
+        → "ジョブメドレー"
+    """
+    pattern = r"(.+?)より(.+?)の応募がございました。"
+    match = re.search(pattern, text)
+    if not match:
+        return ""
+    media_name = match.group(1).strip()
+    return media_name
+
+# -----------------------
+# OpenAIを用いてプロフィール情報を抽出
 # -----------------------
 def parse_profile_info(text: str) -> dict:
     """
-    OpenAI API (ChatCompletion) を使って、応募メッセージから各種情報を抽出する。
-    抽出すべき項目: name, member_id, age, job, experience, address, status, cert, education
+    ChatCompletionで以下をJSON形式で抽出:
+      name, member_id, age, job, experience, address, status, cert, education
     """
     if not OPENAI_API_KEY:
         return {}
@@ -131,27 +149,27 @@ def parse_profile_info(text: str) -> dict:
 # -----------------------
 # スプレッドシートへ書き込み
 # -----------------------
-def write_to_spreadsheet(profile_data: dict, channel_name: str):
+def write_to_spreadsheet(data: dict):
     """
-    スプレッドシートに1行追加する
-    - channel_name というタイトルのワークシートを取得 or 作成して書き込み
+    ディクショナリ data の内容をスプレッドシートに1行追加
     """
     gc = get_gspread_client()
     sh = gc.open_by_key(SPREADSHEET_KEY)
+    worksheet = sh.worksheet("Sheet1")  # シート名はSheet1とする（存在しない場合は作成要）
 
-    # チャンネル名のワークシートを取得 or 作成
-    worksheet = get_or_create_worksheet(sh, channel_name)
-
+    # 列を拡張（病院名・媒体名を先頭に加えた例: hospital_name, media_name, name, ..., education）
     new_row = [
-        profile_data["name"],
-        profile_data["member_id"],
-        profile_data["age"],
-        profile_data["job"],
-        profile_data["experience"],
-        profile_data["address"],
-        profile_data["status"],
-        profile_data["cert"],
-        profile_data["education"]
+        data.get("hospital_name", ""),
+        data.get("media_name", ""),
+        data.get("name", ""),
+        data.get("member_id", ""),
+        data.get("age", ""),
+        data.get("job", ""),
+        data.get("experience", ""),
+        data.get("address", ""),
+        data.get("status", ""),
+        data.get("cert", ""),
+        data.get("education", ""),
     ]
     worksheet.append_row(new_row, value_input_option="USER_ENTERED")
 
@@ -166,44 +184,42 @@ def handle_message_events(body, say, logger):
     event = body.get("event", {})
     text = event.get("text", "")
     thread_ts = event.get("ts")
-    channel_id = event.get("channel")
 
-    # 「ジョブメドレーより〇〇の応募がございました。」を含むかチェック
-    if "ジョブメドレーより" in text and "の応募がございました" in text:
-        # 1) チャンネル名を取得
-        # conversations_info を呼ぶことで、チャンネルIDからチャンネル名を取得
-        # ※ Botに channels:read または groups:read スコープが必要
-        try:
-            channel_info = app_bolt.client.conversations_info(channel=channel_id)
-            # 公開チャンネルなら channel["name"], プライベートなら channel["name"] が取得できる
-            slack_channel_name = channel_info["channel"]["name"]
-        except Exception as e:
-            logger.error(f"チャンネル名の取得に失敗しました: {e}")
-            slack_channel_name = f"UnknownChannel_{channel_id}"
+    # 「応募がございました。」を含むかをチェック
+    if "応募がございました。" in text:
+        # 1) まず病院名(医院名)を抽出
+        hospital_name = extract_hospital_name(text)
+        # 2) 媒体名を抽出
+        media_name = extract_media_name(text)
 
-        # 2) OpenAI で情報を抽出
-        parsed_data = parse_profile_info(text)
+        # 3) OpenAIでプロフィール情報抽出
+        parsed_profile = parse_profile_info(text)
 
-        # 3) スプレッドシートに書き込み
-        if parsed_data["name"] or parsed_data["member_id"]:
+        # 4) 全情報をまとめたdictを作成
+        merged_data = {
+            "hospital_name": hospital_name,
+            "media_name": media_name,
+            **parsed_profile,  # 既存の name, age, job etc を展開
+        }
+
+        # 名前 or 会員番号など、何かしら得られている場合のみ書き込みを行う
+        # (必須条件がなければ省略しても良い)
+        if merged_data["name"] or merged_data["member_id"]:
             try:
-                write_to_spreadsheet(parsed_data, slack_channel_name)
+                write_to_spreadsheet(merged_data)
                 logger.info("スプレッドシートへの書き込みに成功しました。")
-
-                # 書き込み完了メッセージ
+                # 書き込み完了をSlackに返信
                 say(
-                    text=f"スプレッドシートへの書き込みが完了しました。（ワークシート名: {slack_channel_name}）",
+                    text="スプレッドシート書き込みが完了しました。",
                     thread_ts=thread_ts
                 )
             except Exception as e:
                 import traceback
-
                 logger.error(f"スプレッドシートへの書き込みでエラーが発生: {e}")
                 traceback.print_exc()
                 logger.exception("スプレッドシートへの書き込みでエラーの詳細スタックトレース")
-
                 say(
-                    text=f"スプレッドシートへの書き込みでエラーが発生しました: {e}",
+                    text=f"スプレッドシートへの書き込みでエラー: {e}",
                     thread_ts=thread_ts
                 )
 
