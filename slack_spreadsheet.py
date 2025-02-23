@@ -40,7 +40,7 @@ app_bolt = App(
 
 # Flask アプリ生成（Boltのイベントを受け取る用）
 flask_app = Flask(__name__)
-handler = SlackRequestHandler(app_bolt)
+handler = SlackRequestHandler(app=app_bolt)
 
 # -----------------------
 # Google Sheets クライアントの初期化
@@ -152,7 +152,8 @@ def parse_profile_info(text: str) -> dict:
 # ============================
 def ensure_header(worksheet):
     """
-    ワークシートの1行目を確認し、期待するヘッダと異なる場合は上書きする。
+    ワークシートの1行目には書き込まない。
+    A1にSubtotal関数、A2:M2にヘッダを書き込む。
     """
     expected_header = [
         "hospital_name",
@@ -170,14 +171,10 @@ def ensure_header(worksheet):
         "spot_dates",
     ]
     
-    current_header = worksheet.row_values(1)
-    
-    # 既存：1行目へ expected_header を書く処理は残す (ただし空の場合は何もしない)
-    if current_header != expected_header and len(current_header) > 0:
-        worksheet.update('A1:M1', [expected_header])
-
-    # ★追加: 常に A1 に =SUBTOTAL(103,A3:A1000), A2:M2 に ヘッダを書く
+    # A1: Subtotal 関数
     worksheet.update_acell('A1', '=SUBTOTAL(103,A3:A1000)')
+
+    # A2:M2 にヘッダを書き込む (常に上書き)
     worksheet.update('A2:M2', [expected_header])
 
 # ============================
@@ -186,22 +183,16 @@ def ensure_header(worksheet):
 def get_or_create_worksheet(sh, sheet_title: str):
     """
     sheet_title に一致するワークシートを探す。
-    なければ新規作成し、(append_row(header)は削除済みで何も書かない)。
+    なければ新規作成するが、1行目には書かない。
     """
     try:
         worksheet = sh.worksheet(sheet_title)
-        newly_created = False
     except WorksheetNotFound:
         # 新規作成 (行数や列数は必要に応じて拡張)
         worksheet = sh.add_worksheet(title=sheet_title, rows=100, cols=35)
-        newly_created = True
 
-    # 新規作成された場合も、append_row(header, ...) は削除して何もしない
-    # (元のロジックから該当行だけ削除)
-
-    # 最後に ensure_header で上書き
+    # ここでヘッダとSUBTOTAL関数をセット
     ensure_header(worksheet)
-
     return worksheet
 
 # -----------------------
@@ -210,8 +201,7 @@ def get_or_create_worksheet(sh, sheet_title: str):
 def write_to_spreadsheet(data: dict):
     """
     ディクショナリ data の内容をスプレッドシートに1行追加する。
-    チャンネル名を読み出し、そのチャンネル名のワークシートを取得 or 作成して書き込む。
-    1行目(A列)にはヘッダー、既存データは消さずに追加。
+    A2にヘッダ、A3以降にデータ。
     """
     gc = get_gspread_client()
     sh = gc.open_by_key(SPREADSHEET_KEY)
@@ -219,7 +209,6 @@ def write_to_spreadsheet(data: dict):
     channel_name = data.get("channel_name", "UnknownChannel")
     worksheet = get_or_create_worksheet(sh, channel_name)
 
-    # データ行を書く (A3行目以降に追記される想定)
     new_row = [
         data.get("hospital_name", ""),
         data.get("slack_timestamp", ""),
@@ -252,7 +241,6 @@ def handle_message_events(body, say, logger):
         media_name = extract_media_name(text)
         parsed_profile = parse_profile_info(text)
 
-        # Slackのtsを日時文字列に変換 (例: YYYY-MM-DD)
         slack_timestamp_str = ""
         if thread_ts:
             try:
@@ -282,7 +270,6 @@ def handle_message_events(body, say, logger):
             try:
                 write_to_spreadsheet(merged_data)
                 logger.info("スプレッドシートへの書き込みに成功しました。")
-
                 say(text="スプレッドシート書き込みが完了しました。", thread_ts=thread_ts)
             except Exception as e:
                 import traceback
