@@ -77,72 +77,34 @@ def extract_hospital_name(text: str) -> str:
         raw_name = raw_name[:-1]
     return raw_name
 
-# ============================
-# 追加: 媒体名を GPT で fallback 取得する関数
-# ============================
-def parse_media_name_with_gpt(text: str) -> str:
-    """
-    正規表現でマッチしない場合に、OpenAI で
-    「OOOよりXXXの応募がございました。」の OOO 部分を抽出する。
-    """
-    if not OPENAI_API_KEY:
-        return ""
-    
-    system_prompt = (
-        "あなたは与えられた文章から、「OOOよりXXXの応募がございました。」"
-        "という形の文章を探し、その OOO の部分を抜き出すアシスタントです。"
-        "見つからない場合は空文字を返してください。"
-    )
-    user_prompt = (
-        f"次のテキストから「OOOよりXXXの応募がございました。」の OOO を抽出してください。\n\n"
-        f"{text}\n"
-    )
-
-    try:
-        response = openai.ChatCompletion.create(
-            model="gpt-3.5-turbo",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            temperature=0.0,
-        )
-        content = response["choices"][0]["message"]["content"].strip()
-        return content
-    except Exception as e:
-        print(f"OpenAI fallback for media_name error: {e}")
-        return ""
-
 # -----------------------
-# 「○○○よりXXXXの応募がございました。」から媒体名を抜き出す
-# （正規表現でマッチしない場合は OpenAI で取得）
+# 「○○○よりXXXXの応募がございました。」から媒体名を抜き出す (現行コードを同一)
 # -----------------------
 def extract_media_name(text: str) -> str:
     pattern = r"(.+?)より(.+?)の応募がございました。"
     match = re.search(pattern, text)
     if not match:
-        # 正規表現で取得できなかった場合、GPT にフォールバック
-        return parse_media_name_with_gpt(text)
+        return ""
     media_name = match.group(1).strip()
     return media_name
 
 # -----------------------
-# OpenAIを用いてプロフィール情報を抽出
-# （職種は括弧含む, 年齢は数字のみ, 職歴情報はまとめて含む）
+# OpenAIを用いてプロフィール情報を抽出 (現行コードを同一)
 # -----------------------
 def parse_profile_info(text: str) -> dict:
     if not OPENAI_API_KEY:
         return {}
 
+    # ★追加：スポット希望日(spot_dates)も含めて抽出させるよう指示
     system_prompt = (
         "あなたはテキストから以下の情報を抽出するアシスタントです。\n"
         "抽出すべき項目: name(氏名), member_id(会員番号), age(年齢), "
         "job(職種), experience(経験), address(お住まい), status(就業状況), "
-        "cert(資格), education(最終学歴)\n"
+        "cert(資格), education(最終学歴), spot_dates(スポット希望日)\n"
         "職種(job)には括弧内の情報(例: (正社員))も含めてください。\n"
-        "経験(experience)には複数の勤務先名、勤務期間、雇用形態など職歴に関する情報をまとめてください。\n"
-        "※ここでは1つの文字列として出力し、リストやオブジェクトでは返さないでください。\n"
-        "年齢(age)は「歳」という文字がついている場合は削除し、数字のみで出力してください。\n"
+        "経験(experience)には職歴情報をすべて文字列としてまとめてください。\n"
+        "spot_dates(スポット希望日)があれば、複数日でも1つの文字列にまとめてください。\n"
+        "年齢(age)は「歳」を除いて数字のみ出力してください。\n"
         "出力は必ず JSON 形式のみで、キー名は上記の英語でお願いします。\n"
         "値が不明の場合は空文字にしてください。"
     )
@@ -164,16 +126,9 @@ def parse_profile_info(text: str) -> dict:
         content = response["choices"][0]["message"]["content"].strip()
         extracted_data = json.loads(content)
 
-        # 年齢は数字のみ残す（万が一 GPT が「20歳」のように返した時の対策）
+        # 年齢は数字のみ残す（万が一 GPT が「32歳」のように返した時の対策）
         age_str = extracted_data.get("age", "")
-        extracted_data["age"] = re.sub(r"\D", "", age_str)  # 数字以外を削除
-
-        # 万が一 GPT がリストなどで返した時に備えて、サーバ側でもフォールバック整形
-        exp_data = extracted_data.get("experience", "")
-        if isinstance(exp_data, (list, dict)):
-            # リストや辞書の場合は JSON シリアライズ or 独自フォーマットで連結
-            exp_data = json.dumps(exp_data, ensure_ascii=False)
-        extracted_data["experience"] = str(exp_data)
+        extracted_data["age"] = re.sub(r"\D", "", age_str)  # 数字以外を除去
 
         return {
             "name":       extracted_data.get("name", ""),
@@ -185,6 +140,8 @@ def parse_profile_info(text: str) -> dict:
             "status":     extracted_data.get("status", ""),
             "cert":       extracted_data.get("cert", ""),
             "education":  extracted_data.get("education", ""),
+            # ★追加: spot_dates (スポット希望日)
+            "spot_dates": extracted_data.get("spot_dates", ""),
         }
     except Exception as e:
         print(f"OpenAI API error: {e}")
@@ -197,6 +154,7 @@ def ensure_header(worksheet):
     """
     ワークシートの1行目を確認し、期待するヘッダと異なる場合は上書きする。
     """
+    # ★追加: spot_dates 列を最後に追加
     expected_header = [
         "hospital_name",
         "media_name",
@@ -209,14 +167,13 @@ def ensure_header(worksheet):
         "status",
         "cert",
         "education",
+        "spot_dates",  # 新規追加列
     ]
     
-    # 1行目を取得（空セルは末尾カットされるので、長さが違う場合も含めてチェック）
     current_header = worksheet.row_values(1)
     
     if current_header != expected_header:
-        # 1行目まるごと上書き (A1:K1相当の範囲)
-        worksheet.update('A1:K1', [expected_header])
+        worksheet.update('A1:L1', [expected_header])
 
 # ============================
 # 追加: チャンネル用ワークシートを取得 or 作成する関数
@@ -231,7 +188,7 @@ def get_or_create_worksheet(sh, sheet_title: str):
         newly_created = False
     except WorksheetNotFound:
         # 新規作成 (行数や列数は必要に応じて拡張)
-        worksheet = sh.add_worksheet(title=sheet_title, rows=100, cols=20)
+        worksheet = sh.add_worksheet(title=sheet_title, rows=100, cols=30)
         newly_created = True
 
     # 新規作成された場合、1行目に変数名ヘッダーを追加 (A列から)
@@ -248,16 +205,17 @@ def get_or_create_worksheet(sh, sheet_title: str):
             "status",
             "cert",
             "education",
+            "spot_dates",  # 新規追加列
         ]
         worksheet.append_row(header, value_input_option="USER_ENTERED")
 
-    # 取得したワークシートがあっても、念のためヘッダを確認・補正
+    # ヘッダを確認・補正
     ensure_header(worksheet)
 
     return worksheet
 
 # -----------------------
-# スプレッドシートへ書き込み
+# スプレッドシートへ書き込み (現行のwrite_to_spreadsheetを置き換え)
 # -----------------------
 def write_to_spreadsheet(data: dict):
     """
@@ -287,6 +245,7 @@ def write_to_spreadsheet(data: dict):
         data.get("status", ""),
         data.get("cert", ""),
         data.get("education", ""),
+        data.get("spot_dates", ""),  # ★追加列
     ]
     worksheet.append_row(new_row, value_input_option="USER_ENTERED")
 
@@ -318,7 +277,8 @@ def handle_message_events(body, say, logger):
             slack_channel_name = channel_info["channel"]["name"]
         except Exception as e:
             logger.error(f"チャンネル名の取得に失敗: {e}")
-            slack_channel_name = "UnknownChannel"
+            # ★修正：UnknownChannel ではなく channel_id を含むシート名へ
+            slack_channel_name = f"UnknownChannel_{channel_id}"
 
         merged_data["channel_name"] = slack_channel_name
 
