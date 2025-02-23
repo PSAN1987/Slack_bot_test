@@ -13,6 +13,7 @@ from oauth2client.service_account import ServiceAccountCredentials
 from gspread.exceptions import WorksheetNotFound
 
 import datetime  # 日本時間への変換等に使うため
+import time      # リトライ時のスリープに使用（必要に応じて）
 
 # ============================
 # Slack の認証情報 (環境変数)
@@ -74,7 +75,6 @@ def extract_hospital_name(text: str) -> str:
     if not match:
         return ""
     raw_name = match.group(1).strip()
-    # 末尾が「様」であれば削除
     if raw_name.endswith("様"):
         raw_name = raw_name[:-1]
     return raw_name
@@ -90,12 +90,36 @@ def extract_media_name(text: str) -> str:
     media_name = match.group(1).strip()
     return media_name
 
+# ============================
+# 必須キーを空文字で用意した安全なdictを返す関数
+# ============================
+def empty_profile_dict() -> dict:
+    """
+    必要なキーをすべて持つ空文字入りディクショナリを返す。
+    """
+    return {
+        "name": "",
+        "member_id": "",
+        "age": "",
+        "job": "",
+        "experience": "",
+        "address": "",
+        "status": "",
+        "cert": "",
+        "education": "",
+        "spot_dates": "",
+    }
+
 # -----------------------
-# OpenAIを用いてプロフィール情報を抽出 (現行コードを同一)
+# OpenAIを用いてプロフィール情報を抽出 (堅牢版)
 # -----------------------
 def parse_profile_info(text: str) -> dict:
+    """
+    GPT呼び出しを最大2回リトライし、それでも失敗時は必須キーを含む空dictを返す。
+    """
+    # 1. OpenAIキーが無い場合は空辞書を返す
     if not OPENAI_API_KEY:
-        return {}
+        return empty_profile_dict()
 
     system_prompt = (
         "あなたはテキストから以下の情報を抽出するアシスタントです。\n"
@@ -109,51 +133,48 @@ def parse_profile_info(text: str) -> dict:
         "出力は必ず JSON 形式のみで、キー名は上記の英語でお願いします。\n"
         "値が不明の場合は空文字にしてください。"
     )
+    user_prompt = f"以下のテキストから必要項目を抜き出して、JSON形式で返してください。\n\n{text}\n"
 
-    user_prompt = (
-        f"以下のテキストから必要項目を抜き出して、JSON形式で返してください。\n\n"
-        f"{text}\n"
-    )
+    # 2. リトライロジック
+    for attempt in range(2):  # 最大2回
+        try:
+            response = openai.ChatCompletion.create(
+                model="gpt-3.5-turbo",
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                temperature=0.0,
+            )
+            content = response["choices"][0]["message"]["content"].strip()
+            extracted_data = json.loads(content)
 
-    try:
-        response = openai.ChatCompletion.create(
-            model="gpt-3.5-turbo",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            temperature=0.0,
-        )
-        content = response["choices"][0]["message"]["content"].strip()
-        extracted_data = json.loads(content)
+            # 年齢は数字のみ
+            age_str = extracted_data.get("age", "")
+            extracted_data["age"] = re.sub(r"\D", "", age_str)
 
-        # 年齢は数字のみ残す
-        age_str = extracted_data.get("age", "")
-        extracted_data["age"] = re.sub(r"\D", "", age_str)
+            # 必須キー以外は無視。必須キーがあれば取り出し、無ければ空文字
+            safe_data = empty_profile_dict()
+            for k in safe_data.keys():
+                safe_data[k] = extracted_data.get(k, "")
 
-        return {
-            "name":       extracted_data.get("name", ""),
-            "member_id":  extracted_data.get("member_id", ""),
-            "age":        extracted_data.get("age", ""),
-            "job":        extracted_data.get("job", ""),
-            "experience": extracted_data.get("experience", ""),
-            "address":    extracted_data.get("address", ""),
-            "status":     extracted_data.get("status", ""),
-            "cert":       extracted_data.get("cert", ""),
-            "education":  extracted_data.get("education", ""),
-            "spot_dates": extracted_data.get("spot_dates", ""),
-        }
-    except Exception as e:
-        print(f"OpenAI API error: {e}")
-        return {}
+            return safe_data
+
+        except Exception as e:
+            print(f"OpenAI API error (attempt {attempt+1}): {e}")
+            # 一時的なエラーかもしれないので短いスリープ
+            time.sleep(1.0)
+
+    # 3. 2回とも失敗なら、必須キーだけ空で返す
+    return empty_profile_dict()
 
 # ============================
 # 追加: ヘッダを常に確認・補正
 # ============================
 def ensure_header(worksheet):
     """
-    ワークシートの1行目には書き込まない。
-    A1にSubtotal関数、A2:M2にヘッダを書き込む。
+    1行目は =SUBTOTAL(103,A3:A1000)、
+    2行目(A2:M2) はヘッダを書き込む
     """
     expected_header = [
         "hospital_name",
@@ -170,11 +191,8 @@ def ensure_header(worksheet):
         "education",
         "spot_dates",
     ]
-    
-    # A1: Subtotal 関数
-    worksheet.update_acell('A1', '=SUBTOTAL(103,A3:A1000)')
 
-    # A2:M2 にヘッダを書き込む (常に上書き)
+    worksheet.update_acell('A1', '=SUBTOTAL(103,A3:A1000)')
     worksheet.update('A2:M2', [expected_header])
 
 # ============================
@@ -182,16 +200,14 @@ def ensure_header(worksheet):
 # ============================
 def get_or_create_worksheet(sh, sheet_title: str):
     """
-    sheet_title に一致するワークシートを探す。
-    なければ新規作成するが、1行目には書かない。
+    sheet_title に一致するワークシートを探し。
+    なければ新規作成し、A1=SUBTOTAL, A2=ヘッダをセット。
     """
     try:
         worksheet = sh.worksheet(sheet_title)
     except WorksheetNotFound:
-        # 新規作成 (行数や列数は必要に応じて拡張)
         worksheet = sh.add_worksheet(title=sheet_title, rows=100, cols=35)
 
-    # ここでヘッダとSUBTOTAL関数をセット
     ensure_header(worksheet)
     return worksheet
 
@@ -201,7 +217,6 @@ def get_or_create_worksheet(sh, sheet_title: str):
 def write_to_spreadsheet(data: dict):
     """
     ディクショナリ data の内容をスプレッドシートに1行追加する。
-    A2にヘッダ、A3以降にデータ。
     """
     gc = get_gspread_client()
     sh = gc.open_by_key(SPREADSHEET_KEY)
@@ -239,8 +254,11 @@ def handle_message_events(body, say, logger):
     if "応募がございました。" in text:
         hospital_name = extract_hospital_name(text)
         media_name = extract_media_name(text)
+
+        # 堅牢版 parse_profile_info (必ず必須キーを含むdictが返る)
         parsed_profile = parse_profile_info(text)
 
+        # Slackのtsを日時文字列(YYYY-MM-DD)に変換
         slack_timestamp_str = ""
         if thread_ts:
             try:
@@ -257,6 +275,7 @@ def handle_message_events(body, say, logger):
             **parsed_profile
         }
 
+        # チャンネル名取得 (権限不足の場合は例外発生)
         try:
             channel_info = app_bolt.client.conversations_info(channel=channel_id)
             slack_channel_name = channel_info["channel"]["name"]
@@ -266,7 +285,8 @@ def handle_message_events(body, say, logger):
 
         merged_data["channel_name"] = slack_channel_name
 
-        if merged_data["name"] or merged_data["member_id"]:
+        # ここでは get() を使って KeyError を回避
+        if merged_data.get("name") or merged_data.get("member_id"):
             try:
                 write_to_spreadsheet(merged_data)
                 logger.info("スプレッドシートへの書き込みに成功しました。")
