@@ -2,3 +2,4 @@ slack_bolt
 Flask
 gspread
 oauth2client
+gunicorn==22.0.0
