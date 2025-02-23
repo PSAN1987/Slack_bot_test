@@ -85,19 +85,19 @@ def extract_hospital_name(text: str) -> str:
 # -----------------------
 def extract_media_name(text: str) -> str:
     """
-    応募 or 見学希望 どちらにもマッチするように正規表現を用いて
-    媒体名を抽出し、ログを出力する関数。
+    「○○○より ... 応募 or 見学希望 ... ありました／ございました」
+    のような文言から、メディア名(○○○部分)を抽出する。
     """
-    # 応募 or 見学希望 のどちらにもマッチさせる
-    pattern = r"(.+?)より(.+?)(応募|見学希望)(.+?)ございました。"
-    match = re.search(pattern, text)
-    
+    # ・"より" のあとに任意の文字を挟んでもOK
+    # ・"応募" or "見学希望" のあとに "ありました" or "ございました" が出現する
+    #   までを緩くマッチする
+    # ※ re.DOTALL を使うと改行も含めて .* がマッチ可能になる
+    pattern = r"(.+?)より.*?(応募|見学希望).*?(ありました|ございました)"
+    match = re.search(pattern, text, flags=re.DOTALL)
     if not match:
-        logging.info("extract_media_name: No match found. Returning empty string.")
         return ""
-    
+    # group(1) は "より" より前の文字列 → メディア名
     media_name = match.group(1).strip()
-    logging.info(f"extract_media_name: media_name extracted = '{media_name}'")
     return media_name
 
 
