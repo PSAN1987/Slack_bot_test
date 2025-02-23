@@ -3,7 +3,6 @@ import re
 import json
 import openai
 import gspread
-import logging
 
 from flask import Flask, request
 from slack_bolt import App
@@ -85,21 +84,19 @@ def extract_hospital_name(text: str) -> str:
 # -----------------------
 def extract_media_name(text: str) -> str:
     """
-    「○○○より ... 応募 or 見学希望 ... ありました／ございました」
-    のような文言から、メディア名(○○○部分)を抽出する。
+    OOOより ◯◯◯(応募|見学希望)がございました。
+    の場合に OOO をメディア名として取り出す
     """
-    # ・"より" のあとに任意の文字を挟んでもOK
-    # ・"応募" or "見学希望" のあとに "ありました" or "ございました" が出現する
-    #   までを緩くマッチする
-    # ※ re.DOTALL を使うと改行も含めて .* がマッチ可能になる
-    pattern = r"(.+?)より.*?(応募|見学).*?(ありました|ございました)"
-    match = re.search(pattern, text, flags=re.DOTALL)
+    # 「より」以前をグループ1として取得
+    # その後の任意の文字列の中に 「応募」 または 「見学希望」 があり、
+    # 最後に「がございました。」で終わるパターンにマッチ
+    pattern = r"(.+?)より.+?(応募|見学希望)がございました。"
+    match = re.search(pattern, text)
     if not match:
         return ""
-    # group(1) は "より" より前の文字列 → メディア名
+    # group(1) が "より" より前、つまりメディア名
     media_name = match.group(1).strip()
     return media_name
-
 
 # ============================
 # 必須キーを空文字で用意した安全なdictを返す関数
