@@ -177,11 +177,13 @@ def ensure_header(worksheet):
     current_header = worksheet.row_values(1)
     
     if current_header != expected_header:
-        worksheet.update('A1:M1', [expected_header])  # 既存コードはそのまま
+        worksheet.update('A1:M1', [expected_header])  # 既存の1行目ヘッダ書き込みはそのまま残す
 
-    # ★追加ここから: A1セルに =SUBTOTAL(103,A3:A1000)，ヘッダは 2 行目に再配置
-    worksheet.update_acell('A1', '=SUBTOTAL(103,A3:A1000)')  # A1 に数式をセット
-    worksheet.update('A2:M2', [expected_header])             # ヘッダを 2 行目に上書き
+    # ★追加ここから:
+    # 1) A1セルに =SUBTOTAL(103,A3:A1000) を書き込み
+    # 2) 2行目にヘッダを再配置 (A2:M2)
+    worksheet.update_acell('A1', '=SUBTOTAL(103,A3:A1000)')
+    worksheet.update('A2:M2', [expected_header])
     # ★追加ここまで
 
 # ============================
@@ -200,7 +202,7 @@ def get_or_create_worksheet(sh, sheet_title: str):
         worksheet = sh.add_worksheet(title=sheet_title, rows=100, cols=35)
         newly_created = True
 
-    # 新規作成された場合、1行目に変数名ヘッダーを追加 (A列から)
+    # 新規作成された場合、1行目に変数名ヘッダーを追加 (A列から) --- 【既存のロジックをそのまま残す】
     if newly_created:
         header = [
             "hospital_name",
@@ -219,7 +221,7 @@ def get_or_create_worksheet(sh, sheet_title: str):
         ]
         worksheet.append_row(header, value_input_option="USER_ENTERED")
 
-    # ヘッダを確認・補正 (上書き)
+    # ヘッダを確認・補正 (最終的に 1行目はsubtotal, 2行目にヘッダを再配置)
     ensure_header(worksheet)
 
     return worksheet
