@@ -1,6 +1,6 @@
 ﻿import os
-import re
 import json
+import re
 import openai
 import gspread
 
@@ -8,8 +8,6 @@ from flask import Flask, request
 from slack_bolt import App
 from slack_bolt.adapter.flask import SlackRequestHandler
 from oauth2client.service_account import ServiceAccountCredentials
-
-# 新規追加: ワークシートが無いときに発生する例外を扱うため
 from gspread.exceptions import WorksheetNotFound
 
 # ============================
@@ -22,7 +20,7 @@ SLACK_SIGNING_SECRET = os.environ["SLACK_SIGNING_SECRET"]
 # Google認証 (Secret Filesを利用)
 # ============================
 SERVICE_ACCOUNT_FILE = os.environ.get("GCP_SERVICE_ACCOUNT_JSON")  # Secret Filesパス
-SPREADSHEET_KEY = os.environ.get("SPREADSHEET_KEY")  # スプレッドシートID
+SPREADSHEET_KEY = os.environ.get("SPREADSHEET_KEY")               # スプレッドシートのID
 
 # ============================
 # OpenAI APIキー
@@ -40,6 +38,7 @@ app_bolt = App(
 flask_app = Flask(__name__)
 handler = SlackRequestHandler(app=app_bolt)
 
+
 # -----------------------
 # Google Sheets クライアントの初期化
 # -----------------------
@@ -49,7 +48,7 @@ def get_gspread_client():
     Googleスプレッドシートにアクセス可能なクライアントを返す
     """
     if not SERVICE_ACCOUNT_FILE:
-        raise ValueError("環境変数 GCP_SERVICE_ACCOUNT_JSON が設定されていません。")
+        raise ValueError("環境変数 GCP_SERVICE_ACCOUNT_JSON (Secret Filesパス) が設定されていません。")
 
     with open(SERVICE_ACCOUNT_FILE, "r", encoding="utf-8") as f:
         service_account_dict = json.load(f)
@@ -63,35 +62,54 @@ def get_gspread_client():
     gc = gspread.authorize(credentials)
     return gc
 
-# -----------------------
-# 「【○○○様】」から医院名を抜き出す (現行コードを同一)
-# -----------------------
-def extract_hospital_name(text: str) -> str:
-    pattern = r"【([^】]+)】"  # 「【...】」の中身を取得
-    match = re.search(pattern, text)
-    if not match:
-        return ""
-    raw_name = match.group(1).strip()
-    # 末尾が「様」であれば削除
-    if raw_name.endswith("様"):
-        raw_name = raw_name[:-1]
-    return raw_name
 
 # -----------------------
-# 「○○○よりXXXXの応募がございました。」から媒体名を抜き出す (現行コードを同一)
+# チャンネルごとのワークシート取得 or 作成
 # -----------------------
-def extract_media_name(text: str) -> str:
-    pattern = r"(.+?)より(.+?)の応募がございました。"
-    match = re.search(pattern, text)
-    if not match:
-        return ""
-    media_name = match.group(1).strip()
-    return media_name
+def get_or_create_worksheet(sh, worksheet_title: str):
+    """
+    スプレッドシート sh の中で、worksheet_title に対応するワークシートを取得。
+    なければ新規作成して返す。
+    さらに、1行目が空なら日本語の見出し行を書き込む。
+    """
+    try:
+        worksheet = sh.worksheet(worksheet_title)
+    except WorksheetNotFound:
+        sh.add_worksheet(title=worksheet_title, rows=100, cols=20)
+        worksheet = sh.worksheet(worksheet_title)
+
+    # 1行目に見出しが書かれていなければ書き込む（日本語の列名）
+    existing_rows = len(worksheet.get_all_values())
+    if existing_rows < 1:
+        # 変数名を1行目A列から書き出し（日本語）
+        header = [
+            "医院名",         # hospital_name
+            "媒体名",         # media_name
+            "氏名",           # name
+            "会員番号",       # member_id
+            "年齢",           # age
+            "職種",           # job
+            "経験",           # experience
+            "お住まい",       # address
+            "就業状況",       # status
+            "資格",           # cert
+            "最終学歴"        # education
+        ]
+        worksheet.append_row(header, value_input_option="USER_ENTERED")
+
+    return worksheet
+
 
 # -----------------------
-# OpenAIを用いてプロフィール情報を抽出 (現行コードを同一)
+# OpenAI を用いて情報抽出
+#   ※ ()の中身を省略せず抽出
 # -----------------------
 def parse_profile_info(text: str) -> dict:
+    """
+    OpenAI API (ChatCompletion) を使って、応募メッセージから各種情報を抽出する。
+    抽出すべき項目: name, member_id, age, job, experience, address, status, cert, education
+    ()の中身も省略せず全て出力してもらうようプロンプトを補足。
+    """
     if not OPENAI_API_KEY:
         return {}
 
@@ -100,12 +118,14 @@ def parse_profile_info(text: str) -> dict:
         "抽出すべき項目: name(氏名), member_id(会員番号), age(年齢), "
         "job(職種), experience(経験), address(お住まい), status(就業状況), "
         "cert(資格), education(最終学歴)\n"
+        "カッコ（）の中身も省略せずにすべて出力してください。ただし年齢の場合は歳を除いて数字にみにしてください\n"
         "出力は必ず JSON 形式のみで、キー名は上記の英語でお願いします。\n"
         "値が不明の場合は空文字にしてください。"
     )
 
     user_prompt = (
-        f"以下のテキストから必要項目を抜き出して、JSON形式で返してください。\n\n"
+        f"以下のテキストから必要項目を抜き出して、JSON形式で返してください。\n"
+        f"丸カッコや波カッコの中身も省略しないでください。\n\n"
         f"{text}\n"
     )
 
@@ -136,77 +156,39 @@ def parse_profile_info(text: str) -> dict:
         print(f"OpenAI API error: {e}")
         return {}
 
-# ============================
-# 追加: チャンネル用ワークシートを取得 or 作成する関数
-# ============================
-def get_or_create_worksheet(sh, sheet_title: str):
-    """
-    sheet_title に一致するワークシートを探す。
-    なければ新規作成し、1行目(A列から)にヘッダ（変数名）を書き込む。
-    """
-    try:
-        worksheet = sh.worksheet(sheet_title)
-        newly_created = False
-    except WorksheetNotFound:
-        # 新規作成 (行数や列数は必要に応じて拡張)
-        worksheet = sh.add_worksheet(title=sheet_title, rows=100, cols=20)
-        newly_created = True
-
-    # 新規作成された場合、1行目に変数名ヘッダーを追加 (A列から)
-    if newly_created:
-        header = [
-            "hospital_name",
-            "media_name",
-            "name",
-            "member_id",
-            "age",
-            "job",
-            "experience",
-            "address",
-            "status",
-            "cert",
-            "education",
-        ]
-        worksheet.append_row(header, value_input_option="USER_ENTERED")
-
-    return worksheet
 
 # -----------------------
-# スプレッドシートへ書き込み (現行のwrite_to_spreadsheetを置き換え)
+# スプレッドシートへ書き込み
 # -----------------------
-def write_to_spreadsheet(data: dict):
+def write_to_spreadsheet(profile_data: dict, channel_name: str):
     """
-    ディクショナリ data の内容をスプレッドシートに1行追加する。
-    チャンネル名を読み出し、そのチャンネル名のワークシートを取得 or 作成して書き込む。
-    1行目(A列)にはヘッダー、既存データは消さずに追加。
+    - channel_name というタイトルのワークシートを取得 or 作成して書き込み
+    - append_rowでA列から書き出し、既存データは消さずに追加
     """
     gc = get_gspread_client()
     sh = gc.open_by_key(SPREADSHEET_KEY)
-
-    # dataの中に channel_name が含まれている想定
-    channel_name = data.get("channel_name", "UnknownChannel")
-
-    # ワークシート取得 or 新規作成
     worksheet = get_or_create_worksheet(sh, channel_name)
 
-    # 書き込む行を作成 (A列から順に)
+    # A列から順にデータを並べる
     new_row = [
-        data.get("hospital_name", ""),
-        data.get("media_name", ""),
-        data.get("name", ""),
-        data.get("member_id", ""),
-        data.get("age", ""),
-        data.get("job", ""),
-        data.get("experience", ""),
-        data.get("address", ""),
-        data.get("status", ""),
-        data.get("cert", ""),
-        data.get("education", ""),
+        profile_data.get("hospital_name", ""),
+        profile_data.get("media_name", ""),
+        profile_data.get("name", ""),
+        profile_data.get("member_id", ""),
+        profile_data.get("age", ""),
+        profile_data.get("job", ""),
+        profile_data.get("experience", ""),
+        profile_data.get("address", ""),
+        profile_data.get("status", ""),
+        profile_data.get("cert", ""),
+        profile_data.get("education", ""),
     ]
     worksheet.append_row(new_row, value_input_option="USER_ENTERED")
 
+
 # -----------------------
-# Slack Bolt: メッセージイベントのハンドラ (現行コード同一)
+# Slack Bolt: メッセージイベントのハンドラ
+#   ※ チャンネル名が取得できない場合は channel_id を使う
 # -----------------------
 @app_bolt.event("message")
 def handle_message_events(body, say, logger):
@@ -215,31 +197,50 @@ def handle_message_events(body, say, logger):
     thread_ts = event.get("ts")
     channel_id = event.get("channel")
 
+    # 応募がございました。を含むメッセージかチェック
     if "応募がございました。" in text:
-        hospital_name = extract_hospital_name(text)
-        media_name = extract_media_name(text)
+        # チャンネル名を取得。取れなければIDを使う
+        try:
+            channel_info = app_bolt.client.conversations_info(channel=channel_id)
+            slack_channel_name = channel_info["channel"].get("name")
+            if not slack_channel_name:
+                # チャンネル名が取得できない場合
+                slack_channel_name = channel_id
+        except Exception as e:
+            logger.error(f"チャンネル名の取得に失敗: {e}")
+            slack_channel_name = channel_id
+
+        # 必要なら病院名や媒体名などをここで抽出（例: extract_hospital_name, extract_media_name）
+        # ここでは例としてダミーのキーを使う
+        hospital_name = re.search(r"【([^】]+)】", text)
+        if hospital_name:
+            raw_name = hospital_name.group(1)
+            # 末尾が「様」なら削る
+            if raw_name.endswith("様"):
+                raw_name = raw_name[:-1]
+        else:
+            raw_name = ""
+
+        media_match = re.search(r"(.+?)より(.+?)の応募がございました。", text)
+        if media_match:
+            media_name = media_match.group(1).strip()
+        else:
+            media_name = ""
+
+        # OpenAI でプロフィール情報抽出
         parsed_profile = parse_profile_info(text)
 
-        # まとめたdictに、病院名・媒体名を含める
+        # マージ
         merged_data = {
-            "hospital_name": hospital_name,
+            "hospital_name": raw_name,
             "media_name": media_name,
             **parsed_profile
         }
 
-        # 追加: チャンネル名を取得して merged_data に格納
-        try:
-            channel_info = app_bolt.client.conversations_info(channel=channel_id)
-            slack_channel_name = channel_info["channel"]["name"]
-        except Exception as e:
-            logger.error(f"チャンネル名の取得に失敗: {e}")
-            slack_channel_name = "UnknownChannel"
-
-        merged_data["channel_name"] = slack_channel_name
-
+        # 書き込み
         if merged_data["name"] or merged_data["member_id"]:
             try:
-                write_to_spreadsheet(merged_data)
+                write_to_spreadsheet(merged_data, slack_channel_name)
                 logger.info("スプレッドシートへの書き込みに成功しました。")
 
                 say(
@@ -248,16 +249,19 @@ def handle_message_events(body, say, logger):
                 )
             except Exception as e:
                 import traceback
+
                 logger.error(f"スプレッドシートへの書き込みでエラーが発生: {e}")
                 traceback.print_exc()
                 logger.exception("スプレッドシートへの書き込みでエラーの詳細スタックトレース")
+
                 say(
-                    text=f"スプレッドシートへの書き込みでエラー: {e}",
+                    text=f"スプレッドシートへの書き込みでエラーが発生しました: {e}",
                     thread_ts=thread_ts
                 )
 
+
 # -----------------------
-# Flaskルート設定 (現行コード同一)
+# Flaskルート設定
 # -----------------------
 @flask_app.route("/slack/events", methods=["POST"])
 def slack_events():
@@ -267,9 +271,9 @@ def slack_events():
 def healthcheck():
     return "OK", 200
 
+
 # -----------------------
 # アプリ起動 (RenderでのGunicorn運用を想定)
 # -----------------------
 if __name__ == "__main__":
     flask_app.run(host="0.0.0.0", port=5000)
-
