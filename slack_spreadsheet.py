@@ -1,4 +1,4 @@
-
+ï»¿
 import os
 import re
 import json
@@ -11,40 +11,40 @@ import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 
 # ============================
-# Slack ‚Ì”FØî•ñ (ŠÂ‹«•Ï”)
+# Slack ã®èªè¨¼æƒ…å ± (ç’°å¢ƒå¤‰æ•°)
 # ============================
 SLACK_BOT_TOKEN = os.environ["SLACK_BOT_TOKEN"]
 SLACK_SIGNING_SECRET = os.environ["SLACK_SIGNING_SECRET"]
 
 # ============================
-# Google”FØ
+# Googleèªè¨¼
 # ============================
-# Render.com‚È‚Ç‚ÉƒfƒvƒƒC‚·‚é‚Æ‚«‚ÍA
-# JSON‚ğ’¼ÚŠÂ‹«•Ï”‚É–„‚ß‚Ş‚©ABase64‚âƒtƒ@ƒCƒ‹ƒpƒX‚É‚·‚é‚È‚ÇH•v‚µ‚Ä‚­‚¾‚³‚¢
-# ‚±‚±‚Å‚ÍƒVƒ“ƒvƒ‹‚Éƒtƒ@ƒCƒ‹‚Æ‚µ‚Ä“Ç‚İ‚Şƒpƒ^[ƒ“‚ÍÈ—ª
-SERVICE_ACCOUNT_INFO = os.environ.get("GCP_SERVICE_ACCOUNT_JSON")  # JSON•¶š—ñ
-SPREADSHEET_KEY = os.environ.get("SPREADSHEET_KEY")  # ƒXƒvƒŒƒbƒhƒV[ƒg‚ÌID
+# Render.comãªã©ã«ãƒ‡ãƒ—ãƒ­ã‚¤ã™ã‚‹ã¨ãã¯ã€
+# JSONã‚’ç›´æ¥ç’°å¢ƒå¤‰æ•°ã«åŸ‹ã‚è¾¼ã‚€ã‹ã€Base64ã‚„ãƒ•ã‚¡ã‚¤ãƒ«ãƒ‘ã‚¹ã«ã™ã‚‹ãªã©å·¥å¤«ã—ã¦ãã ã•ã„
+# ã“ã“ã§ã¯ã‚·ãƒ³ãƒ—ãƒ«ã«ãƒ•ã‚¡ã‚¤ãƒ«ã¨ã—ã¦èª­ã¿è¾¼ã‚€ãƒ‘ã‚¿ãƒ¼ãƒ³ã¯çœç•¥
+SERVICE_ACCOUNT_INFO = os.environ.get("GCP_SERVICE_ACCOUNT_JSON")  # JSONæ–‡å­—åˆ—
+SPREADSHEET_KEY = os.environ.get("SPREADSHEET_KEY")  # ã‚¹ãƒ—ãƒ¬ãƒƒãƒ‰ã‚·ãƒ¼ãƒˆã®ID
 
-# Slack Bolt ƒAƒvƒŠ‚ğ‰Šú‰»
+# Slack Bolt ã‚¢ãƒ—ãƒªã‚’åˆæœŸåŒ–
 app_bolt = App(
     token=SLACK_BOT_TOKEN,
     signing_secret=SLACK_SIGNING_SECRET
 )
 
-# Flask ƒAƒvƒŠ¶¬iBolt‚ÌƒCƒxƒ“ƒg‚ğó‚¯æ‚é—pj
+# Flask ã‚¢ãƒ—ãƒªç”Ÿæˆï¼ˆBoltã®ã‚¤ãƒ™ãƒ³ãƒˆã‚’å—ã‘å–ã‚‹ç”¨ï¼‰
 flask_app = Flask(__name__)
 handler = SlackRequestHandler(app=app_bolt)
 
 # -----------------------
-# Google Sheets ƒNƒ‰ƒCƒAƒ“ƒg‚Ì‰Šú‰»
+# Google Sheets ã‚¯ãƒ©ã‚¤ã‚¢ãƒ³ãƒˆã®åˆæœŸåŒ–
 # -----------------------
 def get_gspread_client():
     """
-    ŠÂ‹«•Ï”‚©‚çƒT[ƒrƒXƒAƒJƒEƒ“ƒgJSON‚ğ“Ç‚İ‚İA
-    GoogleƒXƒvƒŒƒbƒhƒV[ƒg‚ÉƒAƒNƒZƒX‰Â”\‚ÈƒNƒ‰ƒCƒAƒ“ƒg‚ğ•Ô‚·
+    ç’°å¢ƒå¤‰æ•°ã‹ã‚‰ã‚µãƒ¼ãƒ“ã‚¹ã‚¢ã‚«ã‚¦ãƒ³ãƒˆJSONã‚’èª­ã¿è¾¼ã¿ã€
+    Googleã‚¹ãƒ—ãƒ¬ãƒƒãƒ‰ã‚·ãƒ¼ãƒˆã«ã‚¢ã‚¯ã‚»ã‚¹å¯èƒ½ãªã‚¯ãƒ©ã‚¤ã‚¢ãƒ³ãƒˆã‚’è¿”ã™
     """
     if SERVICE_ACCOUNT_INFO is None:
-        raise ValueError("ŠÂ‹«•Ï” GCP_SERVICE_ACCOUNT_JSON ‚ªİ’è‚³‚ê‚Ä‚¢‚Ü‚¹‚ñ")
+        raise ValueError("ç’°å¢ƒå¤‰æ•° GCP_SERVICE_ACCOUNT_JSON ãŒè¨­å®šã•ã‚Œã¦ã„ã¾ã›ã‚“")
 
     service_account_dict = json.loads(SERVICE_ACCOUNT_INFO)
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/spreadsheets",
@@ -55,28 +55,28 @@ def get_gspread_client():
 
 
 # -----------------------
-# ƒeƒLƒXƒg‰ğÍ—p‚Ì³‹K•\Œ»
+# ãƒ†ã‚­ã‚¹ãƒˆè§£æç”¨ã®æ­£è¦è¡¨ç¾
 # -----------------------
-# —á:
-# uE–¼F—V“¹ r—Yi‚ä‚¤‚Ç‚¤ ‚Æ‚µ‚¨jæ¶v‚©‚çu—V“¹ r—Yv‚ğ”²‚«o‚· “™
-# i–¼‚ÌŠ‡ŒÊ‚âæ¶‚Ì•”•ª‚ğ‚Ç‚¤æ‚èˆµ‚¤‚©‚Í‰^—p‚É‡‚í‚¹‚Ä’²®‚µ‚Ä‚­‚¾‚³‚¢j
-re_name         = re.compile(r"E–¼F([^i\n]+)")     # ij‚ªŠÜ‚Ü‚ê‚È‚¢•”•ª‚ğæ“¾
-re_member_id    = re.compile(r"E‰ïˆõ”Ô†F(\S+)")
-re_age          = re.compile(r"E”N—îF(\d+)Î")
-re_job          = re.compile(r"EEíF(.+)")
-re_experience   = re.compile(r"EŒoŒ±F(.+)")
-re_address      = re.compile(r"E‚¨Z‚Ü‚¢F(.+)")
-re_status       = re.compile(r"EA‹Æó‹µF(.+)")
-re_cert         = re.compile(r"E‘ŠiF(.+)")
-re_education    = re.compile(r"EÅIŠw—ğF(.+)")
+# ä¾‹:
+# ã€Œãƒ»æ°åï¼šéŠé“ ä¿Šé›„ï¼ˆã‚†ã†ã©ã† ã¨ã—ãŠï¼‰å…ˆç”Ÿã€ã‹ã‚‰ã€ŒéŠé“ ä¿Šé›„ã€ã‚’æŠœãå‡ºã™ ç­‰
+# ï¼ˆæ°åã®æ‹¬å¼§ã‚„å…ˆç”Ÿã®éƒ¨åˆ†ã‚’ã©ã†å–ã‚Šæ‰±ã†ã‹ã¯é‹ç”¨ã«åˆã‚ã›ã¦èª¿æ•´ã—ã¦ãã ã•ã„ï¼‰
+re_name         = re.compile(r"ãƒ»æ°åï¼š([^ï¼ˆ\n]+)")     # ï¼ˆï¼‰ãŒå«ã¾ã‚Œãªã„éƒ¨åˆ†ã‚’å–å¾—
+re_member_id    = re.compile(r"ãƒ»ä¼šå“¡ç•ªå·ï¼š(\S+)")
+re_age          = re.compile(r"ãƒ»å¹´é½¢ï¼š(\d+)æ­³")
+re_job          = re.compile(r"ãƒ»è·ç¨®ï¼š(.+)")
+re_experience   = re.compile(r"ãƒ»çµŒé¨“ï¼š(.+)")
+re_address      = re.compile(r"ãƒ»ãŠä½ã¾ã„ï¼š(.+)")
+re_status       = re.compile(r"ãƒ»å°±æ¥­çŠ¶æ³ï¼š(.+)")
+re_cert         = re.compile(r"ãƒ»è³‡æ ¼ï¼š(.+)")
+re_education    = re.compile(r"ãƒ»æœ€çµ‚å­¦æ­´ï¼š(.+)")
 
 # -----------------------
-# ƒƒbƒZ[ƒW‚Ì‰ğÍˆ—
+# ãƒ¡ãƒƒã‚»ãƒ¼ã‚¸ã®è§£æå‡¦ç†
 # -----------------------
 def parse_profile_info(text: str):
     """
-    SlackƒƒbƒZ[ƒW–{•¶‚©‚çƒvƒƒtƒB[ƒ‹î•ñ‚ğ’Šo‚·‚é
-    –ß‚è’l: dict (ƒL[: 'name', 'member_id', 'age', 'job', 'experience', 'address', 'status', 'cert', 'education')
+    Slackãƒ¡ãƒƒã‚»ãƒ¼ã‚¸æœ¬æ–‡ã‹ã‚‰ãƒ—ãƒ­ãƒ•ã‚£ãƒ¼ãƒ«æƒ…å ±ã‚’æŠ½å‡ºã™ã‚‹
+    æˆ»ã‚Šå€¤: dict (ã‚­ãƒ¼: 'name', 'member_id', 'age', 'job', 'experience', 'address', 'status', 'cert', 'education')
     """
     data = {
         "name":        "",
@@ -90,7 +90,7 @@ def parse_profile_info(text: str):
         "education":   "",
     }
 
-    # ³‹K•\Œ»‚Å’Šo
+    # æ­£è¦è¡¨ç¾ã§æŠ½å‡º
     m_name       = re_name.search(text)
     m_member_id  = re_member_id.search(text)
     m_age        = re_age.search(text)
@@ -106,7 +106,7 @@ def parse_profile_info(text: str):
     if m_member_id:
         data["member_id"] = m_member_id.group(1).strip()
     if m_age:
-        data["age"] = m_age.group(1).strip()  # "30" ‚Æ‚¢‚Á‚½”N—î”š
+        data["age"] = m_age.group(1).strip()  # "30" ã¨ã„ã£ãŸå¹´é½¢æ•°å­—
     if m_job:
         data["job"] = m_job.group(1).strip()
     if m_experience:
@@ -123,19 +123,19 @@ def parse_profile_info(text: str):
     return data
 
 # -----------------------
-# ƒXƒvƒŒƒbƒhƒV[ƒg‚Ö‘‚«‚İ
+# ã‚¹ãƒ—ãƒ¬ãƒƒãƒ‰ã‚·ãƒ¼ãƒˆã¸æ›¸ãè¾¼ã¿
 # -----------------------
 def write_to_spreadsheet(profile_data: dict):
     """
-    ƒXƒvƒŒƒbƒhƒV[ƒg‚É1s’Ç‰Á‚·‚é
+    ã‚¹ãƒ—ãƒ¬ãƒƒãƒ‰ã‚·ãƒ¼ãƒˆã«1è¡Œè¿½åŠ ã™ã‚‹
     """
     gc = get_gspread_client()
     sh = gc.open_by_key(SPREADSHEET_KEY)
-    # ƒV[ƒg–¼‚Í‰^—pŸ‘æ‚Å•ÏX‚µ‚Ä‚­‚¾‚³‚¢
+    # ã‚·ãƒ¼ãƒˆåã¯é‹ç”¨æ¬¡ç¬¬ã§å¤‰æ›´ã—ã¦ãã ã•ã„
     worksheet = sh.worksheet("Sheet1")
 
-    # ‚±‚±‚Å‚Í’Pƒ‚É append ‚·‚é—á
-    # ƒJƒ‰ƒ€‡‚Í•K—v‚É‰‚¶‚Ä’²®‚µ‚Ä‚­‚¾‚³‚¢
+    # ã“ã“ã§ã¯å˜ç´”ã« append ã™ã‚‹ä¾‹
+    # ã‚«ãƒ©ãƒ é †ã¯å¿…è¦ã«å¿œã˜ã¦èª¿æ•´ã—ã¦ãã ã•ã„
     new_row = [
         profile_data["name"],
         profile_data["member_id"],
@@ -150,47 +150,48 @@ def write_to_spreadsheet(profile_data: dict):
     worksheet.append_row(new_row, value_input_option="USER_ENTERED")
 
 # -----------------------
-# Slack Bolt: ƒƒbƒZ[ƒWƒCƒxƒ“ƒg‚Ìƒnƒ“ƒhƒ‰
+# Slack Bolt: ãƒ¡ãƒƒã‚»ãƒ¼ã‚¸ã‚¤ãƒ™ãƒ³ãƒˆã®ãƒãƒ³ãƒ‰ãƒ©
 # -----------------------
 @app_bolt.event("message")
 def handle_message_events(body, say, logger):
     """
-    ƒ`ƒƒƒ“ƒlƒ‹‚Ö‚ÌV‹KƒƒbƒZ[ƒWƒCƒxƒ“ƒg‚ğó‚¯æ‚é
+    ãƒãƒ£ãƒ³ãƒãƒ«ã¸ã®æ–°è¦ãƒ¡ãƒƒã‚»ãƒ¼ã‚¸ã‚¤ãƒ™ãƒ³ãƒˆã‚’å—ã‘å–ã‚‹
     """
     event = body.get("event", {})
     text = event.get("text", "")
 
-    # uƒWƒ‡ƒuƒƒhƒŒ[‚æ‚èZZ‚Ì‰•å‚ª‚²‚´‚¢‚Ü‚µ‚½Bv‚ğŠÜ‚Ş‚©ƒ`ƒFƒbƒN
-    if "ƒWƒ‡ƒuƒƒhƒŒ[‚æ‚è" in text and "‚Ì‰•å‚ª‚²‚´‚¢‚Ü‚µ‚½" in text:
-        # ƒvƒƒtƒB[ƒ‹î•ñ‚ğ’Šo
+    # ã€Œã‚¸ãƒ§ãƒ–ãƒ¡ãƒ‰ãƒ¬ãƒ¼ã‚ˆã‚Šã€‡ã€‡ã®å¿œå‹ŸãŒã”ã–ã„ã¾ã—ãŸã€‚ã€ã‚’å«ã‚€ã‹ãƒã‚§ãƒƒã‚¯
+    if "ã‚¸ãƒ§ãƒ–ãƒ¡ãƒ‰ãƒ¬ãƒ¼ã‚ˆã‚Š" in text and "ã®å¿œå‹ŸãŒã”ã–ã„ã¾ã—ãŸ" in text:
+        # ãƒ—ãƒ­ãƒ•ã‚£ãƒ¼ãƒ«æƒ…å ±ã‚’æŠ½å‡º
         parsed_data = parse_profile_info(text)
-        # –¼‚ªæ‚ê‚½“™A‰½‚©‚µ‚çƒvƒƒtƒB[ƒ‹€–Ú‚ª‚ ‚éê‡‚Ì‚İƒXƒvƒŒƒbƒhƒV[ƒg‘‚«‚İ
+        # æ°åãŒå–ã‚ŒãŸç­‰ã€ä½•ã‹ã—ã‚‰ãƒ—ãƒ­ãƒ•ã‚£ãƒ¼ãƒ«é …ç›®ãŒã‚ã‚‹å ´åˆã®ã¿ã‚¹ãƒ—ãƒ¬ãƒƒãƒ‰ã‚·ãƒ¼ãƒˆæ›¸ãè¾¼ã¿
         if parsed_data["name"] or parsed_data["member_id"]:
             try:
                 write_to_spreadsheet(parsed_data)
-                logger.info("ƒXƒvƒŒƒbƒhƒV[ƒg‚Ö‚Ì‘‚«‚İ‚É¬Œ÷‚µ‚Ü‚µ‚½B")
+                logger.info("ã‚¹ãƒ—ãƒ¬ãƒƒãƒ‰ã‚·ãƒ¼ãƒˆã¸ã®æ›¸ãè¾¼ã¿ã«æˆåŠŸã—ã¾ã—ãŸã€‚")
             except Exception as e:
-                logger.error(f"ƒXƒvƒŒƒbƒhƒV[ƒg‚Ö‚Ì‘‚«‚İ‚ÅƒGƒ‰[: {e}")
+                logger.error(f"ã‚¹ãƒ—ãƒ¬ãƒƒãƒ‰ã‚·ãƒ¼ãƒˆã¸ã®æ›¸ãè¾¼ã¿ã§ã‚¨ãƒ©ãƒ¼: {e}")
 
-    # ‚±‚±‚Å‚Ísay“™‚Å•ÔM‚Í‚µ‚È‚¢‚ªA•K—v‚É‰‚¶‚Ä‰“šƒƒbƒZ[ƒW‚ğ‘—M‚µ‚Ä‚à—Ç‚¢
+    # ã“ã“ã§ã¯sayç­‰ã§è¿”ä¿¡ã¯ã—ãªã„ãŒã€å¿…è¦ã«å¿œã˜ã¦å¿œç­”ãƒ¡ãƒƒã‚»ãƒ¼ã‚¸ã‚’é€ä¿¡ã—ã¦ã‚‚è‰¯ã„
 
 
 # -----------------------
-# Flaskƒ‹[ƒgİ’è
+# Flaskãƒ«ãƒ¼ãƒˆè¨­å®š
 # -----------------------
 @flask_app.route("/slack/events", methods=["POST"])
 def slack_events():
     return handler.handle(request)
 
-# ƒwƒ‹ƒXƒ`ƒFƒbƒN—p‚ÌƒGƒ“ƒhƒ|ƒCƒ“ƒg‚È‚Ç
+# ãƒ˜ãƒ«ã‚¹ãƒã‚§ãƒƒã‚¯ç”¨ã®ã‚¨ãƒ³ãƒ‰ãƒã‚¤ãƒ³ãƒˆãªã©
 @flask_app.route("/", methods=["GET"])
 def healthcheck():
     return "OK", 200
 
 # -----------------------
-# ƒAƒvƒŠ‹N“® (Render‚Å‚ÌGunicorn‰^—p‚ğ‘z’è)
+# ã‚¢ãƒ—ãƒªèµ·å‹• (Renderã§ã®Gunicorné‹ç”¨ã‚’æƒ³å®š)
 # -----------------------
-# Render‚È‚Ç‚Å‚Í gunicorn ƒRƒ}ƒ“ƒh‚Å‹N“®‚·‚é‘z’è‚Å‚ ‚èA
-# python main.py ‚Å’¼Ú‹N“®‚·‚éê‡‚É‚ÍˆÈ‰º‚Ì if __name__ == "__main__": ‚ª•K—vB
+# Renderãªã©ã§ã¯ gunicorn ã‚³ãƒãƒ³ãƒ‰ã§èµ·å‹•ã™ã‚‹æƒ³å®šã§ã‚ã‚Šã€
+# python main.py ã§ç›´æ¥èµ·å‹•ã™ã‚‹å ´åˆã«ã¯ä»¥ä¸‹ã® if __name__ == "__main__": ãŒå¿…è¦ã€‚
 if __name__ == "__main__":
     flask_app.run(host="0.0.0.0", port=5000)
+    
