@@ -6,6 +6,7 @@ from flask import Flask, request
 from slack_bolt import App
 from slack_bolt.adapter.flask import SlackRequestHandler
 from oauth2client.service_account import ServiceAccountCredentials
+from gspread.exceptions import WorksheetNotFound
 
 # ============================
 # Slack の認証情報 (環境変数)
@@ -46,7 +47,6 @@ def get_gspread_client():
     if not SERVICE_ACCOUNT_FILE:
         raise ValueError("環境変数 GCP_SERVICE_ACCOUNT_JSON (Secret Filesパス) が設定されていません。")
 
-    # ファイルを読み込んでJSONパース
     with open(SERVICE_ACCOUNT_FILE, "r", encoding="utf-8") as f:
         service_account_dict = json.load(f)
 
@@ -59,16 +59,31 @@ def get_gspread_client():
     gc = gspread.authorize(credentials)
     return gc
 
+# -----------------------
+# チャンネル名のワークシートを取得 or 作成
+# -----------------------
+def get_or_create_worksheet(sh, worksheet_title: str):
+    """
+    スプレッドシートオブジェクト sh から、
+    worksheet_title に一致するワークシートを探す。
+    なければ新規作成して返す。
+    """
+    try:
+        worksheet = sh.worksheet(worksheet_title)
+    except WorksheetNotFound:
+        # 新規にワークシートを作成
+        sh.add_worksheet(title=worksheet_title, rows=100, cols=20)
+        worksheet = sh.worksheet(worksheet_title)
+    return worksheet
 
 # -----------------------
-# OpenAIを用いて情報抽出する処理
+# OpenAI を用いて情報抽出
 # -----------------------
 def parse_profile_info(text: str) -> dict:
     """
     OpenAI API (ChatCompletion) を使って、応募メッセージから各種情報を抽出する。
     抽出すべき項目: name, member_id, age, job, experience, address, status, cert, education
     """
-    # APIキーが無い場合は空dictを返す
     if not OPENAI_API_KEY:
         return {}
 
@@ -88,7 +103,7 @@ def parse_profile_info(text: str) -> dict:
 
     try:
         response = openai.ChatCompletion.create(
-            model="gpt-3.5-turbo",  # 必要に応じて gpt-4 等
+            model="gpt-3.5-turbo",
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
@@ -98,7 +113,6 @@ def parse_profile_info(text: str) -> dict:
         content = response["choices"][0]["message"]["content"].strip()
         extracted_data = json.loads(content)
 
-        # 必要なキーをセット（無い場合は空文字）
         return {
             "name":       extracted_data.get("name", ""),
             "member_id":  extracted_data.get("member_id", ""),
@@ -114,17 +128,19 @@ def parse_profile_info(text: str) -> dict:
         print(f"OpenAI API error: {e}")
         return {}
 
-
 # -----------------------
 # スプレッドシートへ書き込み
 # -----------------------
-def write_to_spreadsheet(profile_data: dict):
+def write_to_spreadsheet(profile_data: dict, channel_name: str):
     """
     スプレッドシートに1行追加する
+    - channel_name というタイトルのワークシートを取得 or 作成して書き込み
     """
     gc = get_gspread_client()
     sh = gc.open_by_key(SPREADSHEET_KEY)
-    worksheet = sh.worksheet("Sheet1")
+
+    # チャンネル名のワークシートを取得 or 作成
+    worksheet = get_or_create_worksheet(sh, channel_name)
 
     new_row = [
         profile_data["name"],
@@ -139,7 +155,6 @@ def write_to_spreadsheet(profile_data: dict):
     ]
     worksheet.append_row(new_row, value_input_option="USER_ENTERED")
 
-
 # -----------------------
 # Slack Bolt: メッセージイベントのハンドラ
 # -----------------------
@@ -150,41 +165,47 @@ def handle_message_events(body, say, logger):
     """
     event = body.get("event", {})
     text = event.get("text", "")
-    # メッセージのタイムスタンプ (返信のthread_tsに使用)
     thread_ts = event.get("ts")
+    channel_id = event.get("channel")
 
     # 「ジョブメドレーより〇〇の応募がございました。」を含むかチェック
     if "ジョブメドレーより" in text and "の応募がございました" in text:
-        # --- 1) OpenAI で情報を抽出 ---
+        # 1) チャンネル名を取得
+        # conversations_info を呼ぶことで、チャンネルIDからチャンネル名を取得
+        # ※ Botに channels:read または groups:read スコープが必要
+        try:
+            channel_info = app_bolt.client.conversations_info(channel=channel_id)
+            # 公開チャンネルなら channel["name"], プライベートなら channel["name"] が取得できる
+            slack_channel_name = channel_info["channel"]["name"]
+        except Exception as e:
+            logger.error(f"チャンネル名の取得に失敗しました: {e}")
+            slack_channel_name = f"UnknownChannel_{channel_id}"
+
+        # 2) OpenAI で情報を抽出
         parsed_data = parse_profile_info(text)
 
-        # --- 2) スプレッドシートに書き込み ---
+        # 3) スプレッドシートに書き込み
         if parsed_data["name"] or parsed_data["member_id"]:
             try:
-                write_to_spreadsheet(parsed_data)
+                write_to_spreadsheet(parsed_data, slack_channel_name)
                 logger.info("スプレッドシートへの書き込みに成功しました。")
 
-                # 書き込み完了したらスレッドに返事
+                # 書き込み完了メッセージ
                 say(
-                    text="スプレッドシート書き込みが完了しました。",
+                    text=f"スプレッドシートへの書き込みが完了しました。（ワークシート名: {slack_channel_name}）",
                     thread_ts=thread_ts
                 )
-
             except Exception as e:
                 import traceback
 
-                # ① 例外メッセージを含むログを出す
                 logger.error(f"スプレッドシートへの書き込みでエラーが発生: {e}")
-                # ② スタックトレースをコンソールに出力（Renderのログに表示される）
                 traceback.print_exc()
-                # ③ logger.exception() でもスタックトレースを出す（任意）
                 logger.exception("スプレッドシートへの書き込みでエラーの詳細スタックトレース")
-                # Slackへの通知 (任意)
-                say(
-                text=f"スプレッドシートへの書き込みでエラーが発生しました: {e}",
-                thread_ts=thread_ts
-                )
 
+                say(
+                    text=f"スプレッドシートへの書き込みでエラーが発生しました: {e}",
+                    thread_ts=thread_ts
+                )
 
 # -----------------------
 # Flaskルート設定
