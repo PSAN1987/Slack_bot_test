@@ -1,5 +1,4 @@
-﻿
-import os
+﻿import os
 import re
 import json
 
@@ -17,12 +16,11 @@ SLACK_BOT_TOKEN = os.environ["SLACK_BOT_TOKEN"]
 SLACK_SIGNING_SECRET = os.environ["SLACK_SIGNING_SECRET"]
 
 # ============================
-# Google認証
+# Google認証 (Secret Filesを利用)
 # ============================
-# Render.comなどにデプロイするときは、
-# JSONを直接環境変数に埋め込むか、Base64やファイルパスにするなど工夫してください
-# ここではシンプルにファイルとして読み込むパターンは省略
-SERVICE_ACCOUNT_INFO = os.environ.get("GCP_SERVICE_ACCOUNT_JSON")  # JSON文字列
+# Render.comで Secret File を配置し、そのファイルパスを
+# GCP_SERVICE_ACCOUNT_JSON 環境変数として登録している想定。
+SERVICE_ACCOUNT_FILE = os.environ.get("GCP_SERVICE_ACCOUNT_JSON")  # ファイルパス
 SPREADSHEET_KEY = os.environ.get("SPREADSHEET_KEY")  # スプレッドシートのID
 
 # Slack Bolt アプリを初期化
@@ -40,15 +38,21 @@ handler = SlackRequestHandler(app=app_bolt)
 # -----------------------
 def get_gspread_client():
     """
-    環境変数からサービスアカウントJSONを読み込み、
+    Secret Filesによるサービスアカウントファイルを読み込み、
     Googleスプレッドシートにアクセス可能なクライアントを返す
     """
-    if SERVICE_ACCOUNT_INFO is None:
-        raise ValueError("環境変数 GCP_SERVICE_ACCOUNT_JSON が設定されていません")
+    if not SERVICE_ACCOUNT_FILE:
+        raise ValueError("環境変数 GCP_SERVICE_ACCOUNT_JSON (Secret Filesパス) が設定されていません。")
 
-    service_account_dict = json.loads(SERVICE_ACCOUNT_INFO)
-    scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/spreadsheets",
-             "https://www.googleapis.com/auth/drive"]
+    # ファイルを読み込んでJSONパース
+    with open(SERVICE_ACCOUNT_FILE, "r", encoding="utf-8") as f:
+        service_account_dict = json.load(f)
+
+    scope = [
+        "https://spreadsheets.google.com/feeds",
+        "https://www.googleapis.com/auth/spreadsheets",
+        "https://www.googleapis.com/auth/drive",
+    ]
     credentials = ServiceAccountCredentials.from_json_keyfile_dict(service_account_dict, scope)
     gc = gspread.authorize(credentials)
     return gc
@@ -57,10 +61,7 @@ def get_gspread_client():
 # -----------------------
 # テキスト解析用の正規表現
 # -----------------------
-# 例:
-# 「・氏名：遊道 俊雄（ゆうどう としお）先生」から「遊道 俊雄」を抜き出す 等
-# （氏名の括弧や先生の部分をどう取り扱うかは運用に合わせて調整してください）
-re_name         = re.compile(r"・氏名：([^（\n]+)")     # （）が含まれない部分を取得
+re_name         = re.compile(r"・氏名：([^（\n]+)")  # （）が含まれない部分を取得
 re_member_id    = re.compile(r"・会員番号：(\S+)")
 re_age          = re.compile(r"・年齢：(\d+)歳")
 re_job          = re.compile(r"・職種：(.+)")
@@ -106,7 +107,7 @@ def parse_profile_info(text: str):
     if m_member_id:
         data["member_id"] = m_member_id.group(1).strip()
     if m_age:
-        data["age"] = m_age.group(1).strip()  # "30" といった年齢数字
+        data["age"] = m_age.group(1).strip()
     if m_job:
         data["job"] = m_job.group(1).strip()
     if m_experience:
@@ -172,8 +173,7 @@ def handle_message_events(body, say, logger):
             except Exception as e:
                 logger.error(f"スプレッドシートへの書き込みでエラー: {e}")
 
-    # ここではsay等で返信はしないが、必要に応じて応答メッセージを送信しても良い
-
+    # 必要であれば say() で返信も可能
 
 # -----------------------
 # Flaskルート設定
@@ -182,7 +182,7 @@ def handle_message_events(body, say, logger):
 def slack_events():
     return handler.handle(request)
 
-# ヘルスチェック用のエンドポイントなど
+# ヘルスチェック用のエンドポイント
 @flask_app.route("/", methods=["GET"])
 def healthcheck():
     return "OK", 200
@@ -190,8 +190,5 @@ def healthcheck():
 # -----------------------
 # アプリ起動 (RenderでのGunicorn運用を想定)
 # -----------------------
-# Renderなどでは gunicorn コマンドで起動する想定であり、
-# python main.py で直接起動する場合には以下の if __name__ == "__main__": が必要。
 if __name__ == "__main__":
     flask_app.run(host="0.0.0.0", port=5000)
-    
