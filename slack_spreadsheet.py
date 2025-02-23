@@ -83,7 +83,8 @@ def extract_hospital_name(text: str) -> str:
 # 「○○○よりXXXXの応募がございました。」から媒体名を抜き出す (現行コードを同一)
 # -----------------------
 def extract_media_name(text: str) -> str:
-    pattern = r"(.+?)より(.+?)応募がございました。"
+    # 応募 or 見学希望 どちらにもマッチするように
+    pattern = r"(.+?)より(.+?)(応募|見学希望)(.+?)ございました。"
     match = re.search(pattern, text)
     if not match:
         return ""
