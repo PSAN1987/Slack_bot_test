@@ -253,7 +253,6 @@ def write_to_spreadsheet(data: dict):
 # Slack Bolt: メッセージイベントのハンドラ (現行コード同一)
 # -----------------------
 @app_bolt.event("message")
-import datetime
 def handle_message_events(body, say, logger):
     event = body.get("event", {})
     text = event.get("text", "")
