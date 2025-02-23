@@ -12,8 +12,7 @@ from oauth2client.service_account import ServiceAccountCredentials
 # 新規追加: ワークシートが無いときに発生する例外を扱うため
 from gspread.exceptions import WorksheetNotFound
 
-# ★追加：日本時間への変換等に使うため
-import datetime
+import datetime  # 日本時間への変換等に使うため
 
 # ============================
 # Slack の認証情報 (環境変数)
@@ -41,7 +40,7 @@ app_bolt = App(
 
 # Flask アプリ生成（Boltのイベントを受け取る用）
 flask_app = Flask(__name__)
-handler = SlackRequestHandler(app=app_bolt)
+handler = SlackRequestHandler(app_bolt)
 
 # -----------------------
 # Google Sheets クライアントの初期化
@@ -98,7 +97,6 @@ def parse_profile_info(text: str) -> dict:
     if not OPENAI_API_KEY:
         return {}
 
-    # ★追加：スポット希望日(spot_dates)も含めて抽出させるよう指示
     system_prompt = (
         "あなたはテキストから以下の情報を抽出するアシスタントです。\n"
         "抽出すべき項目: name(氏名), member_id(会員番号), age(年齢), "
@@ -129,9 +127,9 @@ def parse_profile_info(text: str) -> dict:
         content = response["choices"][0]["message"]["content"].strip()
         extracted_data = json.loads(content)
 
-        # 年齢は数字のみ残す（万が一 GPT が「32歳」のように返した時の対策）
+        # 年齢は数字のみ残す
         age_str = extracted_data.get("age", "")
-        extracted_data["age"] = re.sub(r"\D", "", age_str)  # 数字以外を除去
+        extracted_data["age"] = re.sub(r"\D", "", age_str)
 
         return {
             "name":       extracted_data.get("name", ""),
@@ -143,7 +141,6 @@ def parse_profile_info(text: str) -> dict:
             "status":     extracted_data.get("status", ""),
             "cert":       extracted_data.get("cert", ""),
             "education":  extracted_data.get("education", ""),
-            # ★追加: spot_dates (スポット希望日)
             "spot_dates": extracted_data.get("spot_dates", ""),
         }
     except Exception as e:
@@ -157,10 +154,9 @@ def ensure_header(worksheet):
     """
     ワークシートの1行目を確認し、期待するヘッダと異なる場合は上書きする。
     """
-    # ★修正: slack_timestamp を hospital_name と media_name の間に追加
     expected_header = [
         "hospital_name",
-        "slack_timestamp",  # ★追加列
+        "slack_timestamp",
         "media_name",
         "name",
         "member_id",
@@ -171,20 +167,18 @@ def ensure_header(worksheet):
         "status",
         "cert",
         "education",
-        "spot_dates",  # 新規追加列
+        "spot_dates",
     ]
     
     current_header = worksheet.row_values(1)
     
-    if current_header != expected_header:
-        worksheet.update('A1:M1', [expected_header])  # 既存の1行目ヘッダ書き込みはそのまま残す
+    # 既存：1行目へ expected_header を書く処理は残す (ただし空の場合は何もしない)
+    if current_header != expected_header and len(current_header) > 0:
+        worksheet.update('A1:M1', [expected_header])
 
-    # ★追加ここから:
-    # 1) A1セルに =SUBTOTAL(103,A3:A1000) を書き込み
-    # 2) 2行目にヘッダを再配置 (A2:M2)
+    # ★追加: 常に A1 に =SUBTOTAL(103,A3:A1000), A2:M2 に ヘッダを書く
     worksheet.update_acell('A1', '=SUBTOTAL(103,A3:A1000)')
     worksheet.update('A2:M2', [expected_header])
-    # ★追加ここまで
 
 # ============================
 # 追加: チャンネル用ワークシートを取得 or 作成する関数
@@ -192,7 +186,7 @@ def ensure_header(worksheet):
 def get_or_create_worksheet(sh, sheet_title: str):
     """
     sheet_title に一致するワークシートを探す。
-    なければ新規作成し、1行目(A列から)にヘッダ（変数名）を書き込む。
+    なければ新規作成し、(append_row(header)は削除済みで何も書かない)。
     """
     try:
         worksheet = sh.worksheet(sheet_title)
@@ -202,26 +196,10 @@ def get_or_create_worksheet(sh, sheet_title: str):
         worksheet = sh.add_worksheet(title=sheet_title, rows=100, cols=35)
         newly_created = True
 
-    # 新規作成された場合、1行目に変数名ヘッダーを追加 (A列から) --- 【既存のロジックをそのまま残す】
-    if newly_created:
-        header = [
-            "hospital_name",
-            "slack_timestamp",  # ★追加列
-            "media_name",
-            "name",
-            "member_id",
-            "age",
-            "job",
-            "experience",
-            "address",
-            "status",
-            "cert",
-            "education",
-            "spot_dates",  # 新規追加列
-        ]
-        worksheet.append_row(header, value_input_option="USER_ENTERED")
+    # 新規作成された場合も、append_row(header, ...) は削除して何もしない
+    # (元のロジックから該当行だけ削除)
 
-    # ヘッダを確認・補正 (最終的に 1行目はsubtotal, 2行目にヘッダを再配置)
+    # 最後に ensure_header で上書き
     ensure_header(worksheet)
 
     return worksheet
@@ -238,16 +216,13 @@ def write_to_spreadsheet(data: dict):
     gc = get_gspread_client()
     sh = gc.open_by_key(SPREADSHEET_KEY)
 
-    # dataの中に channel_name が含まれている想定
     channel_name = data.get("channel_name", "UnknownChannel")
-
-    # ワークシート取得 or 新規作成
     worksheet = get_or_create_worksheet(sh, channel_name)
 
-    # ★修正: slack_timestamp 列を hospital_name と media_name の間へ
+    # データ行を書く (A3行目以降に追記される想定)
     new_row = [
         data.get("hospital_name", ""),
-        data.get("slack_timestamp", ""),  # ★追加
+        data.get("slack_timestamp", ""),
         data.get("media_name", ""),
         data.get("name", ""),
         data.get("member_id", ""),
@@ -277,7 +252,7 @@ def handle_message_events(body, say, logger):
         media_name = extract_media_name(text)
         parsed_profile = parse_profile_info(text)
 
-        # ★追加: Slackのtsを日時文字列に変換 (例: YYYY-MM-DD)
+        # Slackのtsを日時文字列に変換 (例: YYYY-MM-DD)
         slack_timestamp_str = ""
         if thread_ts:
             try:
@@ -287,15 +262,13 @@ def handle_message_events(body, say, logger):
             except:
                 pass
 
-        # まとめたdictに、病院名・媒体名を含める
         merged_data = {
             "hospital_name": hospital_name,
-            "slack_timestamp": slack_timestamp_str,  # ★追加
+            "slack_timestamp": slack_timestamp_str,
             "media_name": media_name,
             **parsed_profile
         }
 
-        # 追加: チャンネル名を取得して merged_data に格納
         try:
             channel_info = app_bolt.client.conversations_info(channel=channel_id)
             slack_channel_name = channel_info["channel"]["name"]
@@ -310,19 +283,13 @@ def handle_message_events(body, say, logger):
                 write_to_spreadsheet(merged_data)
                 logger.info("スプレッドシートへの書き込みに成功しました。")
 
-                say(
-                    text="スプレッドシート書き込みが完了しました。",
-                    thread_ts=thread_ts
-                )
+                say(text="スプレッドシート書き込みが完了しました。", thread_ts=thread_ts)
             except Exception as e:
                 import traceback
                 logger.error(f"スプレッドシートへの書き込みでエラーが発生: {e}")
                 traceback.print_exc()
                 logger.exception("スプレッドシートへの書き込みでエラーの詳細スタックトレース")
-                say(
-                    text=f"スプレッドシートへの書き込みでエラー: {e}",
-                    thread_ts=thread_ts
-                )
+                say(text=f"スプレッドシートへの書き込みでエラー: {e}", thread_ts=thread_ts)
 
 # -----------------------
 # Flaskルート設定 (現行コード同一)
