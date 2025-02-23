@@ -12,7 +12,7 @@ from oauth2client.service_account import ServiceAccountCredentials
 # 新規追加: ワークシートが無いときに発生する例外を扱うため
 from gspread.exceptions import WorksheetNotFound
 
-# ★追加：日本時間への変換に使うため
+# ★追加：日本時間への変換等に使うため
 import datetime
 
 # ============================
@@ -177,7 +177,12 @@ def ensure_header(worksheet):
     current_header = worksheet.row_values(1)
     
     if current_header != expected_header:
-        worksheet.update('A1:M1', [expected_header])
+        worksheet.update('A1:M1', [expected_header])  # 既存コードはそのまま
+
+    # ★追加ここから: A1セルに =SUBTOTAL(103,A3:A1000)，ヘッダは 2 行目に再配置
+    worksheet.update_acell('A1', '=SUBTOTAL(103,A3:A1000)')  # A1 に数式をセット
+    worksheet.update('A2:M2', [expected_header])             # ヘッダを 2 行目に上書き
+    # ★追加ここまで
 
 # ============================
 # 追加: チャンネル用ワークシートを取得 or 作成する関数
@@ -214,7 +219,7 @@ def get_or_create_worksheet(sh, sheet_title: str):
         ]
         worksheet.append_row(header, value_input_option="USER_ENTERED")
 
-    # ヘッダを確認・補正
+    # ヘッダを確認・補正 (上書き)
     ensure_header(worksheet)
 
     return worksheet
@@ -270,15 +275,12 @@ def handle_message_events(body, say, logger):
         media_name = extract_media_name(text)
         parsed_profile = parse_profile_info(text)
 
-        # ★追加: Slackのtsを日時文字列に変換
+        # ★追加: Slackのtsを日時文字列に変換 (例: YYYY-MM-DD)
         slack_timestamp_str = ""
         if thread_ts:
             try:
-                # UTCでの日時を取得
                 dt = datetime.datetime.fromtimestamp(float(thread_ts))
-                # JSTへ変換
                 dt_jst = dt + datetime.timedelta(hours=9)
-                # ★ここで「年-月-日」のみの文字列
                 slack_timestamp_str = dt_jst.strftime("%Y-%m-%d")
             except:
                 pass
