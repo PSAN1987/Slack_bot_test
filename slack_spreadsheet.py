@@ -253,13 +253,15 @@ def write_to_spreadsheet(data: dict):
 # Slack Bolt: メッセージイベントのハンドラ (現行コード同一)
 # -----------------------
 @app_bolt.event("message")
+import datetime
 def handle_message_events(body, say, logger):
     event = body.get("event", {})
     text = event.get("text", "")
     thread_ts = event.get("ts")
     channel_id = event.get("channel")
 
-    if "応募がございました。" in text:
+    # ★「応募...がございました。」または「見学希望がございました。」なら処理
+    if ("がございました。" in text) and ("応募" in text or "見学希望" in text):
         hospital_name = extract_hospital_name(text)
         media_name = extract_media_name(text)
 
@@ -293,7 +295,6 @@ def handle_message_events(body, say, logger):
 
         merged_data["channel_name"] = slack_channel_name
 
-        # ここでは get() を使って KeyError を回避
         if merged_data.get("name") or merged_data.get("member_id"):
             try:
                 write_to_spreadsheet(merged_data)
