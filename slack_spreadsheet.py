@@ -77,19 +77,58 @@ def extract_hospital_name(text: str) -> str:
         raw_name = raw_name[:-1]
     return raw_name
 
+# ============================
+# 追加: 媒体名を GPT で fallback 取得する関数
+# ============================
+def parse_media_name_with_gpt(text: str) -> str:
+    """
+    正規表現でマッチしない場合に、OpenAI で
+    「OOOよりXXXの応募がございました。」の OOO 部分を抽出する。
+    """
+    if not OPENAI_API_KEY:
+        return ""
+    
+    system_prompt = (
+        "あなたは与えられた文章から、「OOOよりXXXの応募がございました。」"
+        "という形の文章を探し、その OOO の部分を抜き出すアシスタントです。"
+        "見つからない場合は空文字を返してください。"
+    )
+    user_prompt = (
+        f"次のテキストから「OOOよりXXXの応募がございました。」の OOO を抽出してください。\n\n"
+        f"{text}\n"
+    )
+
+    try:
+        response = openai.ChatCompletion.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=0.0,
+        )
+        content = response["choices"][0]["message"]["content"].strip()
+        return content
+    except Exception as e:
+        print(f"OpenAI fallback for media_name error: {e}")
+        return ""
+
 # -----------------------
-# 「○○○よりXXXXの応募がございました。」から媒体名を抜き出す (現行コードを同一)
+# 「○○○よりXXXXの応募がございました。」から媒体名を抜き出す
+# （正規表現でマッチしない場合は OpenAI で取得）
 # -----------------------
 def extract_media_name(text: str) -> str:
     pattern = r"(.+?)より(.+?)の応募がございました。"
     match = re.search(pattern, text)
     if not match:
-        return ""
+        # 正規表現で取得できなかった場合、GPT にフォールバック
+        return parse_media_name_with_gpt(text)
     media_name = match.group(1).strip()
     return media_name
 
 # -----------------------
-# OpenAIを用いてプロフィール情報を抽出 (現行コードを同一)
+# OpenAIを用いてプロフィール情報を抽出
+# （職種は括弧含む, 年齢は数字のみ, 職歴情報はまとめて含む）
 # -----------------------
 def parse_profile_info(text: str) -> dict:
     if not OPENAI_API_KEY:
@@ -100,6 +139,9 @@ def parse_profile_info(text: str) -> dict:
         "抽出すべき項目: name(氏名), member_id(会員番号), age(年齢), "
         "job(職種), experience(経験), address(お住まい), status(就業状況), "
         "cert(資格), education(最終学歴)\n"
+        "職種(job)には括弧内の情報(例: (正社員))も含めてください。\n"
+        "経験(experience)には複数の勤務先名、勤務期間、雇用形態など職歴に関する情報をすべて含めてください。\n"
+        "年齢(age)は「歳」という文字がついている場合は削除して、数字のみで出力してください。\n"
         "出力は必ず JSON 形式のみで、キー名は上記の英語でお願いします。\n"
         "値が不明の場合は空文字にしてください。"
     )
@@ -120,6 +162,10 @@ def parse_profile_info(text: str) -> dict:
         )
         content = response["choices"][0]["message"]["content"].strip()
         extracted_data = json.loads(content)
+
+        # 年齢は数字のみ残す（万が一 GPT が「20歳」のように返した時の対策）
+        age_str = extracted_data.get("age", "")
+        extracted_data["age"] = re.sub(r"\D", "", age_str)  # 数字以外を削除
 
         return {
             "name":       extracted_data.get("name", ""),
