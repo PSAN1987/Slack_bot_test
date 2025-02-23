@@ -3,6 +3,7 @@ import re
 import json
 import openai
 import gspread
+import logging
 
 from flask import Flask, request
 from slack_bolt import App
@@ -83,13 +84,22 @@ def extract_hospital_name(text: str) -> str:
 # 「○○○よりXXXXの応募がございました。」から媒体名を抜き出す (現行コードを同一)
 # -----------------------
 def extract_media_name(text: str) -> str:
-    # 応募 or 見学希望 どちらにもマッチするように
+    """
+    応募 or 見学希望 どちらにもマッチするように正規表現を用いて
+    媒体名を抽出し、ログを出力する関数。
+    """
+    # 応募 or 見学希望 のどちらにもマッチさせる
     pattern = r"(.+?)より(.+?)(応募|見学希望)(.+?)ございました。"
     match = re.search(pattern, text)
+    
     if not match:
+        logging.info("extract_media_name: No match found. Returning empty string.")
         return ""
+    
     media_name = match.group(1).strip()
+    logging.info(f"extract_media_name: media_name extracted = '{media_name}'")
     return media_name
+
 
 # ============================
 # 必須キーを空文字で用意した安全なdictを返す関数
