@@ -12,7 +12,7 @@ from oauth2client.service_account import ServiceAccountCredentials
 # 新規追加: ワークシートが無いときに発生する例外を扱うため
 from gspread.exceptions import WorksheetNotFound
 
-# ★追加: Slack日時を文字列に変換するためにdatetimeをインポート
+# ★追加：日本時間への変換に使うため
 import datetime
 
 # ============================
@@ -274,10 +274,12 @@ def handle_message_events(body, say, logger):
         slack_timestamp_str = ""
         if thread_ts:
             try:
-                # float変換 → datetime → 任意フォーマット
+                # UTCでの日時を取得
                 dt = datetime.datetime.fromtimestamp(float(thread_ts))
-                # ここでは例として "YYYY-MM-DD HH:MM:SS" 形式に変換
-                slack_timestamp_str = dt.strftime("%Y-%m-%d %H:%M:%S")
+                # JSTへ変換
+                dt_jst = dt + datetime.timedelta(hours=9)
+                # ★ここで「年-月-日」のみの文字列
+                slack_timestamp_str = dt_jst.strftime("%Y-%m-%d")
             except:
                 pass
 
