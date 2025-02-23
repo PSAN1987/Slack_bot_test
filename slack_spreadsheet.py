@@ -140,8 +140,9 @@ def parse_profile_info(text: str) -> dict:
         "job(職種), experience(経験), address(お住まい), status(就業状況), "
         "cert(資格), education(最終学歴)\n"
         "職種(job)には括弧内の情報(例: (正社員))も含めてください。\n"
-        "経験(experience)には複数の勤務先名、勤務期間、雇用形態など職歴に関する情報をすべて含めてください。\n"
-        "年齢(age)は「歳」という文字がついている場合は削除して、数字のみで出力してください。\n"
+        "経験(experience)には複数の勤務先名、勤務期間、雇用形態など職歴に関する情報をまとめてください。\n"
+        "※ここでは1つの文字列として出力し、リストやオブジェクトでは返さないでください。\n"
+        "年齢(age)は「歳」という文字がついている場合は削除し、数字のみで出力してください。\n"
         "出力は必ず JSON 形式のみで、キー名は上記の英語でお願いします。\n"
         "値が不明の場合は空文字にしてください。"
     )
@@ -166,6 +167,13 @@ def parse_profile_info(text: str) -> dict:
         # 年齢は数字のみ残す（万が一 GPT が「20歳」のように返した時の対策）
         age_str = extracted_data.get("age", "")
         extracted_data["age"] = re.sub(r"\D", "", age_str)  # 数字以外を削除
+
+        # 万が一 GPT がリストなどで返した時に備えて、サーバ側でもフォールバック整形
+        exp_data = extracted_data.get("experience", "")
+        if isinstance(exp_data, (list, dict)):
+            # リストや辞書の場合は JSON シリアライズ or 独自フォーマットで連結
+            exp_data = json.dumps(exp_data, ensure_ascii=False)
+        extracted_data["experience"] = str(exp_data)
 
         return {
             "name":       extracted_data.get("name", ""),
