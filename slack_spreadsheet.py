@@ -12,6 +12,9 @@ from oauth2client.service_account import ServiceAccountCredentials
 # 新規追加: ワークシートが無いときに発生する例外を扱うため
 from gspread.exceptions import WorksheetNotFound
 
+# ★追加: Slack日時を文字列に変換するためにdatetimeをインポート
+import datetime
+
 # ============================
 # Slack の認証情報 (環境変数)
 # ============================
@@ -154,9 +157,10 @@ def ensure_header(worksheet):
     """
     ワークシートの1行目を確認し、期待するヘッダと異なる場合は上書きする。
     """
-    # ★追加: spot_dates 列を最後に追加
+    # ★修正: slack_timestamp を hospital_name と media_name の間に追加
     expected_header = [
         "hospital_name",
+        "slack_timestamp",  # ★追加列
         "media_name",
         "name",
         "member_id",
@@ -173,7 +177,7 @@ def ensure_header(worksheet):
     current_header = worksheet.row_values(1)
     
     if current_header != expected_header:
-        worksheet.update('A1:L1', [expected_header])
+        worksheet.update('A1:M1', [expected_header])
 
 # ============================
 # 追加: チャンネル用ワークシートを取得 or 作成する関数
@@ -188,13 +192,14 @@ def get_or_create_worksheet(sh, sheet_title: str):
         newly_created = False
     except WorksheetNotFound:
         # 新規作成 (行数や列数は必要に応じて拡張)
-        worksheet = sh.add_worksheet(title=sheet_title, rows=100, cols=30)
+        worksheet = sh.add_worksheet(title=sheet_title, rows=100, cols=35)
         newly_created = True
 
     # 新規作成された場合、1行目に変数名ヘッダーを追加 (A列から)
     if newly_created:
         header = [
             "hospital_name",
+            "slack_timestamp",  # ★追加列
             "media_name",
             "name",
             "member_id",
@@ -232,9 +237,10 @@ def write_to_spreadsheet(data: dict):
     # ワークシート取得 or 新規作成
     worksheet = get_or_create_worksheet(sh, channel_name)
 
-    # 書き込む行を作成 (A列から順に)
+    # ★修正: slack_timestamp 列を hospital_name と media_name の間へ
     new_row = [
         data.get("hospital_name", ""),
+        data.get("slack_timestamp", ""),  # ★追加
         data.get("media_name", ""),
         data.get("name", ""),
         data.get("member_id", ""),
@@ -245,7 +251,7 @@ def write_to_spreadsheet(data: dict):
         data.get("status", ""),
         data.get("cert", ""),
         data.get("education", ""),
-        data.get("spot_dates", ""),  # ★追加列
+        data.get("spot_dates", ""),
     ]
     worksheet.append_row(new_row, value_input_option="USER_ENTERED")
 
@@ -264,9 +270,21 @@ def handle_message_events(body, say, logger):
         media_name = extract_media_name(text)
         parsed_profile = parse_profile_info(text)
 
+        # ★追加: Slackのtsを日時文字列に変換
+        slack_timestamp_str = ""
+        if thread_ts:
+            try:
+                # float変換 → datetime → 任意フォーマット
+                dt = datetime.datetime.fromtimestamp(float(thread_ts))
+                # ここでは例として "YYYY-MM-DD HH:MM:SS" 形式に変換
+                slack_timestamp_str = dt.strftime("%Y-%m-%d %H:%M:%S")
+            except:
+                pass
+
         # まとめたdictに、病院名・媒体名を含める
         merged_data = {
             "hospital_name": hospital_name,
+            "slack_timestamp": slack_timestamp_str,  # ★追加
             "media_name": media_name,
             **parsed_profile
         }
@@ -277,7 +295,6 @@ def handle_message_events(body, say, logger):
             slack_channel_name = channel_info["channel"]["name"]
         except Exception as e:
             logger.error(f"チャンネル名の取得に失敗: {e}")
-            # ★修正：UnknownChannel ではなく channel_id を含むシート名へ
             slack_channel_name = f"UnknownChannel_{channel_id}"
 
         merged_data["channel_name"] = slack_channel_name
