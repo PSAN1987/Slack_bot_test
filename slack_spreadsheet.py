@@ -70,18 +70,20 @@ def get_or_create_worksheet(sh, worksheet_title: str):
     """
     スプレッドシート sh の中で、worksheet_title に対応するワークシートを取得。
     なければ新規作成して返す。
-    さらに、1行目が空なら日本語の見出し行を書き込む。
+    さらに、ワークシートが空であれば日本語の見出し行を書き込む。
     """
     try:
         worksheet = sh.worksheet(worksheet_title)
     except WorksheetNotFound:
+        # 該当ワークシートがなければ新規作成
         sh.add_worksheet(title=worksheet_title, rows=100, cols=20)
         worksheet = sh.worksheet(worksheet_title)
 
-    # 1行目に見出しが書かれていなければ書き込む（日本語の列名）
-    existing_rows = len(worksheet.get_all_values())
-    if existing_rows < 1:
-        # 変数名を1行目A列から書き出し（日本語）
+    # ワークシート内の値をすべて取得
+    all_values = worksheet.get_all_values()
+
+    # まだ1件も書き込まれていない場合（=空の状態）なら、1行目に日本語の変数名を記入
+    if len(all_values) == 0:
         header = [
             "医院名",         # hospital_name
             "媒体名",         # media_name
@@ -109,6 +111,7 @@ def parse_profile_info(text: str) -> dict:
     OpenAI API (ChatCompletion) を使って、応募メッセージから各種情報を抽出する。
     抽出すべき項目: name, member_id, age, job, experience, address, status, cert, education
     ()の中身も省略せず全て出力してもらうようプロンプトを補足。
+    年齢については「歳」を除いて数字のみにしてください。
     """
     if not OPENAI_API_KEY:
         return {}
@@ -118,7 +121,7 @@ def parse_profile_info(text: str) -> dict:
         "抽出すべき項目: name(氏名), member_id(会員番号), age(年齢), "
         "job(職種), experience(経験), address(お住まい), status(就業状況), "
         "cert(資格), education(最終学歴)\n"
-        "カッコ（）の中身も省略せずにすべて出力してください。ただし年齢の場合は歳を除いて数字にみにしてください\n"
+        "カッコ（）の中身も省略せずにすべて出力してください。ただし年齢の場合は「歳」を除いて数字のみにしてください。\n"
         "出力は必ず JSON 形式のみで、キー名は上記の英語でお願いします。\n"
         "値が不明の場合は空文字にしてください。"
     )
@@ -144,7 +147,7 @@ def parse_profile_info(text: str) -> dict:
         return {
             "name":       extracted_data.get("name", ""),
             "member_id":  extracted_data.get("member_id", ""),
-            "age":        extracted_data.get("age", ""),
+            "age":        extracted_data.get("age", ""),         # 「歳」を除去した数字が入る想定
             "job":        extracted_data.get("job", ""),
             "experience": extracted_data.get("experience", ""),
             "address":    extracted_data.get("address", ""),
@@ -210,8 +213,7 @@ def handle_message_events(body, say, logger):
             logger.error(f"チャンネル名の取得に失敗: {e}")
             slack_channel_name = channel_id
 
-        # 必要なら病院名や媒体名などをここで抽出（例: extract_hospital_name, extract_media_name）
-        # ここでは例としてダミーのキーを使う
+        # 必要なら病院名(hospital_name)や媒体名(media_name)などを正規表現で抽出
         hospital_name = re.search(r"【([^】]+)】", text)
         if hospital_name:
             raw_name = hospital_name.group(1)
@@ -237,7 +239,7 @@ def handle_message_events(body, say, logger):
             **parsed_profile
         }
 
-        # 書き込み
+        # 名前 or 会員番号があれば書き込む
         if merged_data["name"] or merged_data["member_id"]:
             try:
                 write_to_spreadsheet(merged_data, slack_channel_name)
