@@ -137,6 +137,34 @@ def parse_profile_info(text: str) -> dict:
         return {}
 
 # ============================
+# 追加: ヘッダを常に確認・補正
+# ============================
+def ensure_header(worksheet):
+    """
+    ワークシートの1行目を確認し、期待するヘッダと異なる場合は上書きする。
+    """
+    expected_header = [
+        "hospital_name",
+        "media_name",
+        "name",
+        "member_id",
+        "age",
+        "job",
+        "experience",
+        "address",
+        "status",
+        "cert",
+        "education",
+    ]
+    
+    # 1行目を取得（空セルは末尾カットされるので、長さが違う場合も含めてチェック）
+    current_header = worksheet.row_values(1)
+    
+    if current_header != expected_header:
+        # 1行目まるごと上書き (A1:K1相当の範囲)
+        worksheet.update('A1:K1', [expected_header])
+
+# ============================
 # 追加: チャンネル用ワークシートを取得 or 作成する関数
 # ============================
 def get_or_create_worksheet(sh, sheet_title: str):
@@ -169,10 +197,13 @@ def get_or_create_worksheet(sh, sheet_title: str):
         ]
         worksheet.append_row(header, value_input_option="USER_ENTERED")
 
+    # 取得したワークシートがあっても、念のためヘッダを確認・補正
+    ensure_header(worksheet)
+
     return worksheet
 
 # -----------------------
-# スプレッドシートへ書き込み (現行のwrite_to_spreadsheetを置き換え)
+# スプレッドシートへ書き込み
 # -----------------------
 def write_to_spreadsheet(data: dict):
     """
@@ -272,4 +303,3 @@ def healthcheck():
 # -----------------------
 if __name__ == "__main__":
     flask_app.run(host="0.0.0.0", port=5000)
-
