@@ -171,10 +171,18 @@ def handle_message_events(body, say, logger):
                 )
 
             except Exception as e:
-                logger.error(f"スプレッドシートへの書き込みでエラー: {e}")
+                import traceback
+
+                # ① 例外メッセージを含むログを出す
+                logger.error(f"スプレッドシートへの書き込みでエラーが発生: {e}")
+                # ② スタックトレースをコンソールに出力（Renderのログに表示される）
+                traceback.print_exc()
+                # ③ logger.exception() でもスタックトレースを出す（任意）
+                logger.exception("スプレッドシートへの書き込みでエラーの詳細スタックトレース")
+                # Slackへの通知 (任意)
                 say(
-                    text=f"スプレッドシートへの書き込みでエラーが発生しました: {e}",
-                    thread_ts=thread_ts
+                text=f"スプレッドシートへの書き込みでエラーが発生しました: {e}",
+                thread_ts=thread_ts
                 )
 
 
