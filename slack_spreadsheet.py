@@ -92,7 +92,7 @@ def extract_media_name(text: str) -> str:
     # ・"応募" or "見学希望" のあとに "ありました" or "ございました" が出現する
     #   までを緩くマッチする
     # ※ re.DOTALL を使うと改行も含めて .* がマッチ可能になる
-    pattern = r"(.+?)より.*?(応募|見学希望).*?(ありました|ございました)"
+    pattern = r"(.+?)より.*?(応募|見学).*?(ありました|ございました)"
     match = re.search(pattern, text, flags=re.DOTALL)
     if not match:
         return ""
